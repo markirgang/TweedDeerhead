@@ -9,6 +9,9 @@ const PORT = process.env.PORT || 3121;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const ENV_FILE = path.join(__dirname, '.env');
 
+// Last known mic VU reading, served instantly if the mic daemon is busy
+let lastMicLevel = { level: 0, device: null };
+
 // ============================================================================
 // 1. DO NOT AUTO-LAUNCH EMEETLINK (Prevents camera feed blockage & blue 'e' logo)
 // ============================================================================
@@ -514,19 +517,26 @@ const server = http.createServer(async (req, res) => {
   // Proxy live EMEET PIXY camera frame from Python DirectShow bridge
   if (pathname === '/api/camera/frame' && req.method === 'GET') {
     const camIdx = parsedUrl.searchParams.get('cam') || '0';
-    http.get(`http://127.0.0.1:3122/frame?cam=${encodeURIComponent(camIdx)}`, (camRes) => {
+    let replied = false;
+    const camReq = http.get({ host: '127.0.0.1', port: 3122, path: `/frame?cam=${encodeURIComponent(camIdx)}`, timeout: 2500 }, (camRes) => {
       if (camRes.statusCode !== 200) {
-        res.writeHead(503);
-        return res.end();
+        if (!replied) { replied = true; res.writeHead(503); res.end(); }
+        camRes.resume();
+        return;
       }
+      replied = true;
       res.writeHead(200, {
         'Content-Type': 'image/jpeg',
         'Cache-Control': 'no-store, no-cache, must-revalidate'
       });
       camRes.pipe(res);
-    }).on('error', () => {
-      res.writeHead(503);
-      res.end();
+    });
+    camReq.on('timeout', () => {
+      camReq.destroy();
+      if (!replied) { replied = true; res.writeHead(503); res.end(); }
+    });
+    camReq.on('error', () => {
+      if (!replied) { replied = true; res.writeHead(503); res.end(); }
     });
     return;
   }
@@ -543,12 +553,35 @@ const server = http.createServer(async (req, res) => {
 
   // Proxy real-time RMS microphone VU level from Python sounddevice daemon
   if (pathname === '/api/mic/level' && req.method === 'GET') {
-    http.get('http://127.0.0.1:3123/level', (micRes) => {
-      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-      micRes.pipe(res);
-    }).on('error', () => {
-      sendJson(res, 200, { level: 0 });
+    // Cache the last level so a slow/blocked mic daemon can never stall the UI
+    let finished = false;
+    const finish = (payload) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      try {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify(payload));
+      } catch {}
+    };
+
+    const timer = setTimeout(() => finish(lastMicLevel), 900);
+
+    const micReq = http.get({ host: '127.0.0.1', port: 3123, path: '/level', timeout: 800 }, (micRes) => {
+      let body = '';
+      micRes.on('data', (chunk) => { body += chunk; });
+      micRes.on('end', () => {
+        try {
+          const parsed = JSON.parse(body);
+          lastMicLevel = parsed;
+          finish(parsed);
+        } catch {
+          finish(lastMicLevel);
+        }
+      });
     });
+    micReq.on('timeout', () => { micReq.destroy(); finish(lastMicLevel); });
+    micReq.on('error', () => finish(lastMicLevel));
     return;
   }
 
@@ -556,12 +589,16 @@ const server = http.createServer(async (req, res) => {
   if (pathname === '/api/mic/listen' && req.method === 'POST') {
     const micReq = http.request(
       'http://127.0.0.1:3123/listen',
-      { method: 'POST', headers: { 'Content-Type': 'application/json' } },
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, timeout: 30000 },
       (micRes) => {
         res.writeHead(micRes.statusCode, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         micRes.pipe(res);
       }
     );
+    micReq.on('timeout', () => {
+      micReq.destroy();
+      sendJson(res, 200, { ok: false, transcript: '', timeout: true });
+    });
     micReq.on('error', (err) => {
       sendJson(res, 500, { ok: false, error: err.message });
     });

@@ -5,7 +5,7 @@ import time
 import io
 import wave
 import speech_recognition as sr
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 
 recognizer = sr.Recognizer()
@@ -129,6 +129,7 @@ class MicHandler(BaseHTTPRequestHandler):
 if __name__ == '__main__':
     t = threading.Thread(target=audio_monitor_loop, daemon=True)
     t.start()
-    server = HTTPServer(('127.0.0.1', 3123), MicHandler)
+    server = ThreadingHTTPServer(('127.0.0.1', 3123), MicHandler)
+    server.daemon_threads = True
     print(f"[PixyMic] EMEET PIXY Audio & VU Level Daemon running on http://127.0.0.1:3123", flush=True)
     server.serve_forever()
