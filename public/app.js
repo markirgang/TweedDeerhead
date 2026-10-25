@@ -36,6 +36,7 @@ const state = {
   history: [],
   win11Hardware: null,
   pixyTracking: 'unknown',
+  songPlaying: false,
   settings: {
     cameraId: localStorage.getItem('tweed_cameraId') || '0',
     micId: localStorage.getItem('tweed_micId') || 'mic-pixy',
@@ -96,6 +97,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   startPixyBridgeLoop();
   loadCocoSsdModel();
   startVisionDetectionLoop();
+  initMusicPlayer();
 
   // 4. Start REAL-TIME hardware VU meter polling from Python EMEET PIXY daemon
   startRealtimeHardwareVuPolling();
@@ -126,6 +128,9 @@ function bindElements() {
     'reset3dViewBtn',
     'quickCameraSelect', 'quickMicSelect', 'quickVoicePresetSelect',
     'conversationToggleBtn', 'talkBtnHeading', 'talkBtnSubtext',
+    'musicDropZone', 'musicFileInput', 'musicChooseBtn', 'musicDropTitle', 'musicDropHint',
+    'musicPlayBtn', 'musicStopBtn', 'musicTimeLabel', 'musicSeek', 'musicVolume',
+    'musicStatusBadge', 'musicJawFill', 'musicJawState', 'lipsyncToggle',
     'vuStatusDot', 'vuLevelLabel', 'mainTestMicBtn', 'micStateBadge', 'vuLedLadder',
     'liveTelemetryText',
     'lookAndSpeakBtn', 'stopSpeechBtn',
@@ -576,6 +581,15 @@ async function runContinuousListeningLoop() {
       continue;
     }
 
+    // While a song is playing Buckley is singing, not chatting: pause the
+    // microphone loop so he never talks over the music (or mistakes it for a
+    // visitor and answers the stereo).
+    if (state.songPlaying) {
+      state.isListening = false;
+      await new Promise(r => setTimeout(r, 400));
+      continue;
+    }
+
     state.isListening = true;
     if (els.deerStateBadge) els.deerStateBadge.textContent = '👂 Ears Perked (Listening...)';
 
@@ -585,6 +599,10 @@ async function runContinuousListeningLoop() {
       const data = await res.json();
 
       if (!state.continuousConversationActive) break;
+
+      // A song may have started (or been imported) while the mic was listening;
+      // discard that capture instead of replying to it.
+      if (state.songPlaying) continue;
 
       if (data.transcript && data.transcript.trim()) {
         const heard = data.transcript.trim();
@@ -789,6 +807,9 @@ function escapeHtml(str) {
 // ============================================================================
 async function playAudioWav(audioDataUrl) {
   stopDeerSpeech();
+  // The jaw can only do one thing at a time: if Buckley was lipsyncing a song,
+  // pause it so the speech clapper owns the solenoid.
+  if (state.songPlaying) pauseMusic();
   state.isSpeaking = true;
   if (els.deerStateBadge) els.deerStateBadge.textContent = '🗣️ Buckley Talking!';
   startBinarySolenoidJawClapper();
@@ -809,6 +830,7 @@ async function playAudioWav(audioDataUrl) {
 
 async function speakAsDeerhead(text) {
   stopDeerSpeech();
+  if (state.songPlaying) pauseMusic();
   state.isSpeaking = true;
   if (els.deerStateBadge) els.deerStateBadge.textContent = '🗣️ Buckley Talking!';
   startBinarySolenoidJawClapper();
@@ -872,6 +894,399 @@ function stopBinarySolenoidJawClapper() {
   if (els.deerStateBadge) {
     els.deerStateBadge.textContent = state.continuousConversationActive ? '👂 Ears Perked (Listening...)' : '👀 Tracking Room';
   }
+}
+
+// ============================================================================
+// MUSIC PLAYER + REAL LIPSYNC
+// Loads an MP3 (or WAV/M4A/OGG) from disk, plays it through the Web Audio API
+// and drives the binary jaw solenoid from the live audio envelope, so Buckley
+// mouths along with the song instead of just flapping on a timer.
+// ============================================================================
+const music = {
+  audio: null,
+  ctx: null,
+  source: null,
+  analyser: null,
+  gain: null,
+  samples: null,
+  raf: null,
+  name: '',
+  objectUrl: null,
+  loaded: false,
+  jawOpen: false,
+  lastToggleAt: 0,
+  openedAt: 0,
+  envelope: 0,
+  peak: 0.08,
+  seeking: false
+};
+
+// Jaw solenoid physical limits: it can only snap open/shut so often, and a
+// sustained loud note must not leave the mouth hanging open like a trapdoor.
+const JAW_MIN_TOGGLE_MS = 60;
+const JAW_MAX_OPEN_MS = 280;
+
+function formatTrackTime(seconds) {
+  const value = Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
+  const mins = Math.floor(value / 60);
+  const secs = Math.floor(value % 60);
+  return `${mins}:${String(secs).padStart(2, '0')}`;
+}
+
+function setMusicBadge(text, kind = 'status-neutral') {
+  if (!els.musicStatusBadge) return;
+  els.musicStatusBadge.textContent = text;
+  els.musicStatusBadge.className = `status-pill ${kind}`;
+}
+
+function updateMusicButtons() {
+  const hasTrack = music.loaded;
+  const playing = Boolean(state.songPlaying);
+
+  if (els.musicPlayBtn) {
+    els.musicPlayBtn.disabled = !hasTrack;
+    els.musicPlayBtn.textContent = playing ? 'Ⅱ Pause' : '▶ Play';
+  }
+  if (els.musicStopBtn) els.musicStopBtn.disabled = !hasTrack;
+  if (els.musicSeek) els.musicSeek.disabled = !hasTrack;
+}
+
+function updateMusicTime() {
+  const audio = music.audio;
+  if (!audio) return;
+  const duration = audio.duration || 0;
+  if (els.musicTimeLabel) {
+    els.musicTimeLabel.textContent = `${formatTrackTime(audio.currentTime)} / ${formatTrackTime(duration)}`;
+  }
+  if (els.musicSeek && !music.seeking && duration > 0) {
+    els.musicSeek.value = String(Math.round((audio.currentTime / duration) * 1000));
+  }
+}
+
+// One AudioContext, one analyser — created lazily on the first user gesture.
+function ensureMusicGraph() {
+  if (music.ctx) return true;
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx || !music.audio) return false;
+
+  music.ctx = new AudioCtx();
+  music.source = music.ctx.createMediaElementSource(music.audio);
+  music.analyser = music.ctx.createAnalyser();
+  music.analyser.fftSize = 1024;
+  music.analyser.smoothingTimeConstant = 0.15;
+  music.samples = new Uint8Array(music.analyser.fftSize);
+  music.gain = music.ctx.createGain();
+  music.gain.gain.value = 1;
+
+  music.source.connect(music.analyser);
+  music.analyser.connect(music.gain);
+  music.gain.connect(music.ctx.destination);
+
+  applyMusicVolume();
+  return true;
+}
+
+// Volume is applied on the gain node (not the media element) so the loudness
+// the lipsync analyser sees is independent of how loud you are listening.
+function applyMusicVolume() {
+  const level = Math.max(0, Math.min(1, Number(els.musicVolume?.value ?? 80) / 100));
+  if (music.gain) {
+    music.gain.gain.value = level;
+    if (music.audio) music.audio.volume = 1;
+  } else if (music.audio) {
+    music.audio.volume = level;
+  }
+  return level;
+}
+
+function applyJawState() {
+  const lipsyncEnabled = els.lipsyncToggle ? els.lipsyncToggle.checked : true;
+  const open = Boolean(state.songPlaying && lipsyncEnabled && music.jawOpen);
+
+  if (window.Deerhead3D) window.Deerhead3D.setJawSolenoidState(open);
+
+  if (els.musicJawState) {
+    els.musicJawState.textContent = open ? '[OPEN - ON]' : '[SHUT - OFF]';
+    els.musicJawState.style.color = open ? '#38ef7d' : '#e59a3c';
+  }
+}
+
+function stopLipsyncLoop() {
+  if (music.raf) {
+    cancelAnimationFrame(music.raf);
+    music.raf = null;
+  }
+  music.jawOpen = false;
+  if (els.musicJawFill) els.musicJawFill.style.width = '0%';
+  applyJawState();
+}
+
+function startLipsyncLoop() {
+  if (music.raf) return;
+
+  const tick = () => {
+    music.raf = requestAnimationFrame(tick);
+    if (!music.analyser || !state.songPlaying) return;
+
+    music.analyser.getByteTimeDomainData(music.samples);
+
+    // Root mean square of the waveform = how loud the song is right now
+    let sum = 0;
+    for (let i = 0; i < music.samples.length; i += 1) {
+      const v = (music.samples[i] - 128) / 128;
+      sum += v * v;
+    }
+    const rms = Math.sqrt(sum / music.samples.length);
+
+    // Attack fast, release slower so the mouth doesn't stutter on every frame
+    music.envelope = music.envelope * 0.45 + rms * 0.55;
+
+    // Track a slowly falling peak so the threshold adapts to quiet/loud songs
+    music.peak = Math.max(music.envelope, music.peak * 0.995, 0.05);
+    const threshold = Math.max(0.012, music.peak * 0.42);
+    // Hysteresis: it takes a louder sound to open the jaw than to keep it open,
+    // so near-silence between beats doesn't make the mouth flutter.
+    const wantOpen = music.jawOpen
+      ? music.envelope > threshold * 0.5
+      : music.envelope > threshold;
+
+    const now = performance.now();
+    if (wantOpen && music.jawOpen && now - music.openedAt > JAW_MAX_OPEN_MS) {
+      // Sustained note: chatter the solenoid instead of holding the jaw open
+      music.jawOpen = false;
+      music.lastToggleAt = now;
+      applyJawState();
+    } else if (wantOpen !== music.jawOpen && now - music.lastToggleAt >= JAW_MIN_TOGGLE_MS) {
+      music.jawOpen = wantOpen;
+      music.lastToggleAt = now;
+      if (wantOpen) music.openedAt = now;
+      applyJawState();
+    }
+
+    if (els.musicJawFill) {
+      const level = Math.min(100, Math.round((music.envelope / (music.peak || 0.2)) * 100));
+      els.musicJawFill.style.width = `${level}%`;
+    }
+  };
+
+  music.raf = requestAnimationFrame(tick);
+}
+
+function resetMusicUI() {
+  if (els.musicDropZone) els.musicDropZone.classList.remove('has-track');
+  if (els.musicDropTitle) els.musicDropTitle.textContent = 'Drop an MP3 here, or choose a file';
+  if (els.musicDropHint) els.musicDropHint.textContent = 'MP3, WAV, M4A, OGG — played from this PC, never uploaded.';
+  if (els.musicTimeLabel) els.musicTimeLabel.textContent = '0:00 / 0:00';
+  if (els.musicSeek) els.musicSeek.value = '0';
+  setMusicBadge('No song loaded');
+  updateMusicButtons();
+}
+
+function loadMusicFile(file) {
+  if (!file) return;
+
+  const looksLikeAudio = /^audio\//i.test(file.type || '') ||
+    /\.(mp3|wav|m4a|ogg|oga|aac|flac)$/i.test(file.name || '');
+
+  if (!looksLikeAudio) {
+    showToast('⚠️ That is not an audio file — pick an MP3, WAV, M4A or OGG.');
+    return;
+  }
+
+  stopMusic({ silent: true });
+
+  if (music.objectUrl) {
+    URL.revokeObjectURL(music.objectUrl);
+    music.objectUrl = null;
+  }
+
+  if (!music.audio) {
+    music.audio = new Audio();
+    music.audio.preload = 'auto';
+    music.audio.crossOrigin = 'anonymous';
+    music.audio.addEventListener('timeupdate', updateMusicTime);
+    music.audio.addEventListener('durationchange', updateMusicTime);
+    music.audio.addEventListener('ended', onMusicEnded);
+    music.audio.addEventListener('error', () => {
+      music.loaded = false;
+      updateMusicButtons();
+      setMusicBadge('Could not load', 'status-warn');
+      showToast('⚠️ Could not decode that audio file. Try a standard MP3.');
+    });
+  }
+
+  music.name = (file.name || 'song').replace(/\.[^.]+$/, '');
+  music.objectUrl = URL.createObjectURL(file);
+  music.audio.src = music.objectUrl;
+  applyMusicVolume();
+  music.audio.load();
+
+  music.loaded = true;
+  music.peak = 0.08;
+  music.envelope = 0;
+
+  if (els.musicDropZone) els.musicDropZone.classList.add('has-track');
+  if (els.musicDropTitle) els.musicDropTitle.textContent = `🎵 ${music.name}`;
+  if (els.musicDropHint) els.musicDropHint.textContent = 'Ready to play — press ▶️ Play and Buckley will lipsync.';
+
+  updateMusicButtons();
+  setMusicBadge('Loaded', 'status-ok');
+  showToast(`🎵 Loaded "${music.name}" — press Play to make Buckley sing along.`);
+}
+
+async function playMusic() {
+  if (!music.audio || !music.loaded) return;
+
+  // Singing replaces talking.
+  if (state.isSpeaking) stopDeerSpeech();
+
+  if (!ensureMusicGraph()) {
+    showToast('⚠️ This browser cannot analyse audio for lipsync.');
+  }
+  if (music.ctx && music.ctx.state === 'suspended') {
+    try { await music.ctx.resume(); } catch {}
+  }
+
+  try {
+    await music.audio.play();
+  } catch (err) {
+    showToast(`⚠️ Could not play audio: ${err.message}`);
+    return;
+  }
+
+  state.songPlaying = true;
+  startLipsyncLoop();
+  setMusicBadge('Playing', 'status-ok');
+  updateMusicButtons();
+
+  if (els.deerStateBadge) els.deerStateBadge.textContent = '🎵 Buckley is jamming along!';
+}
+
+function pauseMusic() {
+  if (!music.audio) return;
+  music.audio.pause();
+  state.songPlaying = false;
+  stopLipsyncLoop();
+  setMusicBadge('Paused', 'status-neutral');
+  updateMusicButtons();
+  if (els.deerStateBadge) {
+    els.deerStateBadge.textContent = state.continuousConversationActive
+      ? '👂 Ears Perked (Listening...)'
+      : '👀 Tracking Room';
+  }
+}
+
+function stopMusic({ silent = false } = {}) {
+  if (!music.audio) {
+    state.songPlaying = false;
+    stopLipsyncLoop();
+    return;
+  }
+
+  music.audio.pause();
+  try { music.audio.currentTime = 0; } catch {}
+  state.songPlaying = false;
+  stopLipsyncLoop();
+  updateMusicTime();
+
+  if (music.loaded) {
+    setMusicBadge('Stopped', 'status-neutral');
+  }
+  updateMusicButtons();
+
+  if (!silent) {
+    if (els.deerStateBadge) {
+      els.deerStateBadge.textContent = state.continuousConversationActive
+        ? '👂 Ears Perked (Listening...)'
+        : '👀 Tracking Room';
+    }
+  }
+}
+
+function onMusicEnded() {
+  state.songPlaying = false;
+  stopLipsyncLoop();
+  updateMusicButtons();
+  updateMusicTime();
+  setMusicBadge('Finished', 'status-neutral');
+
+  if (els.deerStateBadge) {
+    els.deerStateBadge.textContent = state.continuousConversationActive
+      ? '👂 Ears Perked (Listening...)'
+      : '👀 Tracking Room';
+  }
+}
+
+function toggleMusicPlayback() {
+  if (state.songPlaying) pauseMusic();
+  else playMusic();
+}
+
+function initMusicPlayer() {
+  if (!els.musicDropZone) return;
+
+  els.musicChooseBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    els.musicFileInput?.click();
+  });
+
+  els.musicDropZone.addEventListener('click', () => els.musicFileInput?.click());
+
+  els.musicFileInput?.addEventListener('change', () => {
+    const file = els.musicFileInput.files && els.musicFileInput.files[0];
+    if (file) loadMusicFile(file);
+    els.musicFileInput.value = '';
+  });
+
+  // Drag & drop an MP3 straight onto the card
+  ['dragenter', 'dragover'].forEach((type) => {
+    els.musicDropZone.addEventListener(type, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      els.musicDropZone.classList.add('dragging');
+    });
+  });
+  ['dragleave', 'dragend'].forEach((type) => {
+    els.musicDropZone.addEventListener(type, () => {
+      els.musicDropZone.classList.remove('dragging');
+    });
+  });
+  els.musicDropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    els.musicDropZone.classList.remove('dragging');
+    const file = e.dataTransfer?.files?.[0];
+    if (file) loadMusicFile(file);
+  });
+
+  els.musicPlayBtn?.addEventListener('click', toggleMusicPlayback);
+  els.musicStopBtn?.addEventListener('click', () => stopMusic());
+
+  els.musicVolume?.addEventListener('input', () => {
+    applyMusicVolume();
+    localStorage.setItem('tweed_musicVolume', els.musicVolume.value);
+  });
+
+  els.musicSeek?.addEventListener('pointerdown', () => { music.seeking = true; });
+  els.musicSeek?.addEventListener('input', () => {
+    const duration = music.audio?.duration || 0;
+    if (!duration) return;
+    music.audio.currentTime = (Number(els.musicSeek.value) / 1000) * duration;
+    updateMusicTime();
+  });
+  els.musicSeek?.addEventListener('change', () => { music.seeking = false; });
+
+  els.lipsyncToggle?.addEventListener('change', () => {
+    applyJawState();
+    showToast(els.lipsyncToggle.checked
+      ? '👄 Lipsync ON — Buckley mouths along with the music.'
+      : '👄 Lipsync OFF — jaw stays shut.');
+  });
+
+  const savedVolume = localStorage.getItem('tweed_musicVolume');
+  if (savedVolume !== null && els.musicVolume) els.musicVolume.value = savedVolume;
+
+  resetMusicUI();
 }
 
 // ============================================================================
@@ -1340,6 +1755,7 @@ function evaluateSceneAndTrack(frameW, frameH) {
   if (
     people.length > 0 &&
     els.autoGreetToggle?.checked &&
+    !state.songPlaying &&
     !state.isThinking &&
     !state.isSpeaking &&
     !state.continuousConversationActive &&

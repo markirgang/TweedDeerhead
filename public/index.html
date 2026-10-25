@@ -137,6 +137,59 @@
         </div>
       </section>
 
+      <!-- =====================================================================
+           MUSIC PLAYER: IMPORT AN MP3 AND BUCKLEY LIPSYNCS ALONG
+           ===================================================================== -->
+      <section class="card music-card">
+        <div class="music-header">
+          <div class="music-title">
+            <span class="vp-icon">🎵</span>
+            <div>
+              <strong>Music &amp; Lipsync</strong>
+              <p class="sub-label">Import a song and Buckley's jaw solenoid chatters along with the beat.</p>
+            </div>
+          </div>
+          <label class="toggle-chip" title="Move Buckley's jaw solenoid in time with the music">
+            <input type="checkbox" id="lipsyncToggle" checked />
+            <span>👄 Lipsync</span>
+          </label>
+        </div>
+
+        <div class="music-drop" id="musicDropZone">
+          <input type="file" id="musicFileInput" class="hidden"
+                 accept=".mp3,.wav,.m4a,.ogg,.aac,.flac,audio/mpeg,audio/mp3,audio/wav,audio/x-wav,audio/ogg,audio/mp4,audio/aac,audio/flac,audio/*" />
+          <div class="music-drop-icon">🎧</div>
+          <div class="music-drop-text">
+            <strong id="musicDropTitle">Drop an MP3 here, or choose a file</strong>
+            <p class="sub-label" id="musicDropHint">MP3, WAV, M4A, OGG — played from this PC, never uploaded.</p>
+          </div>
+          <button type="button" id="musicChooseBtn" class="btn btn-amber btn-sm">📂 Choose MP3</button>
+        </div>
+
+        <div class="music-controls">
+          <button type="button" id="musicPlayBtn" class="btn btn-amber btn-sm" disabled>▶ Play</button>
+          <button type="button" id="musicStopBtn" class="btn btn-sm" disabled>■ Stop</button>
+
+          <div class="music-progress-wrap">
+            <span id="musicTimeLabel" class="music-time">0:00 / 0:00</span>
+            <input type="range" id="musicSeek" class="music-seek" min="0" max="1000" step="1" value="0" disabled />
+          </div>
+
+          <div class="music-volume-wrap">
+            <label for="musicVolume" title="Music volume">🔊</label>
+            <input type="range" id="musicVolume" class="music-volume" min="0" max="100" value="80" />
+          </div>
+
+          <span id="musicStatusBadge" class="status-pill status-neutral">No song loaded</span>
+        </div>
+
+        <div class="music-jaw-meter">
+          <span class="music-jaw-label">👄 Jaw solenoid:</span>
+          <div class="music-jaw-bar"><div class="music-jaw-fill" id="musicJawFill"></div></div>
+          <span id="musicJawState" class="music-jaw-state">[SHUT - OFF]</span>
+        </div>
+      </section>
+
       <!-- CONTINUOUS TALK BUTTON + VU METER DIRECTLY UNDER IT -->
       <section class="card talk-vu-combo-card">
         <!-- 1. CONTINUOUS CONVERSATION BUTTON (STAYS ON CONTINUOUSLY FOR THE ENTIRE SESSION!) -->

@@ -18,6 +18,11 @@ An interactive, animatronic-style AI Deerhead ("**Buckley**, the Tweed Blvd Stag
     - **Speaker / Audio Output** & **Voice Synthesis** (pitch, rate, volume, and speaker test)
       - **123 male & female voices from 50 countries:** British, Australian, Indian, Scottish, Irish, New Zealand, South African, Canadian, Singaporean, Kenyan, Tanzanian, Filipino and American, plus Spanish, French, German, Italian, Portuguese, Dutch, Swedish, Polish, Russian, Turkish, Hindi, Japanese, Korean, Mandarin, Arabic, Hebrew, Greek, Czech, Danish, Finnish, Norwegian, Hungarian, Romanian, Ukrainian, Vietnamese, Thai, Indonesian, Malay, Tamil, Telugu, Bengali, Gujarati, Kannada, Malayalam, Marathi, Persian and Urdu.
     - **Windows 11 Device Manager PnP Inspector** (scans connected cameras, Pixy USB devices, audio endpoints, and COM ports)
+- **🎵 Music &amp; Lipsync:**
+  - Import any **MP3 / WAV / M4A / OGG** file (drag it onto the card or use **Choose MP3**) and Buckley's jaw solenoid chatters along with the song in real time.
+  - The jaw is driven from the **live audio envelope** (Web Audio analyser), not a fixed timer, so it speeds up on busy passages and closes during quiet ones.
+  - Play / pause / stop, seek, and volume controls, plus a live jaw meter showing `[OPEN - ON]` / `[SHUT - OFF]`.
+  - While a song plays the microphone loop pauses so Buckley sings instead of trying to answer the stereo, and a **👄 Lipsync** switch turns the jaw motion off if you just want the music.
 - **🧠 Google Gemini Multimodal Vision Backend:**
   - Powered by Google Gemini (`gemini-2.5-flash`, `gemini-2.5-pro`, etc.).
   - Sends both the live webcam frame and visual telemetry so Buckley comments specifically on what visitors look like, what they're holding, or what they're doing.

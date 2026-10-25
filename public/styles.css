@@ -1051,3 +1051,160 @@ body {
 .hidden {
   display: none !important;
 }
+
+/* ============================================================================
+   MUSIC PLAYER + LIPSYNC CARD
+   ============================================================================ */
+.music-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.music-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.music-title {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.music-title strong {
+  color: var(--amber-bright);
+  font-size: 1rem;
+}
+
+.music-title p {
+  margin: 0.15rem 0 0 0;
+}
+
+.music-drop {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  flex-wrap: wrap;
+  padding: 0.9rem 1rem;
+  border: 2px dashed var(--border-wood);
+  border-radius: 10px;
+  background: #150f09;
+  transition: border-color 0.15s ease, background 0.15s ease;
+  cursor: pointer;
+}
+
+.music-drop:hover {
+  border-color: var(--amber-accent);
+}
+
+.music-drop.dragging {
+  border-color: var(--pixy-green);
+  background: #16210f;
+}
+
+.music-drop.has-track {
+  border-style: solid;
+  border-color: rgba(56, 239, 125, 0.5);
+}
+
+.music-drop-icon {
+  font-size: 1.5rem;
+  line-height: 1;
+}
+
+.music-drop-text {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.music-drop-text strong {
+  display: block;
+  color: var(--text-main);
+  font-size: 0.92rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-drop-text p {
+  margin: 0.15rem 0 0 0;
+}
+
+.music-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+}
+
+.music-progress-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex: 1 1 260px;
+  min-width: 200px;
+}
+
+.music-time {
+  font-family: Consolas, monospace;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.music-seek {
+  flex: 1;
+  accent-color: var(--amber-accent);
+  height: 4px;
+}
+
+.music-volume-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.music-volume {
+  width: 90px;
+  accent-color: var(--amber-accent);
+}
+
+.music-jaw-meter {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.music-jaw-label {
+  white-space: nowrap;
+}
+
+.music-jaw-bar {
+  flex: 1;
+  height: 10px;
+  background: #0d0906;
+  border: 1px solid var(--border-wood);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.music-jaw-fill {
+  width: 0%;
+  height: 100%;
+  background: linear-gradient(90deg, #38ef7d, #e59a3c);
+  transition: width 60ms linear;
+}
+
+.music-jaw-state {
+  font-family: Consolas, monospace;
+  font-size: 0.74rem;
+  color: var(--amber-bright);
+  min-width: 96px;
+  text-align: right;
+}
