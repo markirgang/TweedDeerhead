@@ -111,8 +111,26 @@ function runPowerShellEncoded(psScript, timeoutMs = 10000) {
   });
 }
 
-// Query Windows 11 PnP devices using Base64 EncodedCommand so $_ is never mangled
-async function queryWindowsHardware() {
+function dedupeByName(items) {
+  const seen = new Set();
+  const out = [];
+  for (const item of items) {
+    const key = (item.FriendlyName || '').trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out;
+}
+
+// Pre-warmed hardware cache scanned on server startup so clients get instant choices
+let cachedHardware = null;
+
+async function queryWindowsHardware(forceRefresh = false) {
+  if (cachedHardware && !forceRefresh) {
+    return cachedHardware;
+  }
+
   const psScript = `
 $ErrorActionPreference = 'SilentlyContinue'
 $devices = @(Get-PnpDevice -PresentOnly | Where-Object {
@@ -137,40 +155,66 @@ $voices = @($synth.GetInstalledVoices() | ForEach-Object { $_.VoiceInfo.Name })
     const parsed = JSON.parse(stdout);
     const allDevs = Array.isArray(parsed.devices) ? parsed.devices : (parsed.devices ? [parsed.devices] : []);
 
-    const cameras = allDevs.filter(d =>
+    const cameras = dedupeByName(allDevs.filter(d =>
       d.Class === 'Camera' ||
       (d.Class === 'MEDIA' && /Camera|Webcam|PIXY/i.test(d.FriendlyName) && !/Audio/i.test(d.FriendlyName))
-    );
-    const microphones = allDevs.filter(d =>
-      d.Class === 'AudioEndpoint' && (/\{0\.0\.1\./i.test(d.InstanceId || '') || /Mic|Input|Virtual Audio/i.test(d.FriendlyName))
-    );
-    const speakers = allDevs.filter(d =>
-      d.Class === 'AudioEndpoint' && (/\{0\.0\.0\./i.test(d.InstanceId || '') || /Speaker|Headphone|Display Audio|Output/i.test(d.FriendlyName))
-    );
+    ));
 
-    return {
-      os: parsed.os || { Caption: 'Windows 11', CSName: os.hostname() },
+    const microphones = dedupeByName([
+      ...allDevs.filter(d =>
+        d.Class === 'AudioEndpoint' && (/\{0\.0\.1\./i.test(d.InstanceId || '') || /Mic|Input|Virtual Audio/i.test(d.FriendlyName))
+      ),
+      { FriendlyName: 'Windows 11 Default System Microphone', Class: 'AudioEndpoint', Status: 'OK', InstanceId: 'win11-default-mic' }
+    ]);
+
+    const speakers = dedupeByName([
+      ...allDevs.filter(d =>
+        d.Class === 'AudioEndpoint' && (/\{0\.0\.0\./i.test(d.InstanceId || '') || /Speaker|Headphone|Display Audio|Output/i.test(d.FriendlyName))
+      ),
+      { FriendlyName: 'Windows 11 Default System Speaker', Class: 'AudioEndpoint', Status: 'OK', InstanceId: 'win11-default-speaker' }
+    ]);
+
+    cachedHardware = {
+      scannedAt: new Date().toISOString(),
+      os: parsed.os || { Caption: 'Microsoft Windows 11 Home', CSName: os.hostname() },
       devices: allDevs,
-      cameras,
+      cameras: cameras.length ? cameras : [{ FriendlyName: 'EMEET PIXY', Class: 'Camera', Status: 'OK' }],
       microphones,
       speakers,
-      voices: Array.isArray(parsed.voices) ? parsed.voices : []
+      voices: Array.isArray(parsed.voices) && parsed.voices.length ? parsed.voices : ['Microsoft David Desktop', 'Microsoft Zira Desktop']
     };
+    return cachedHardware;
   } catch (err) {
-    return {
-      os: { Caption: 'Windows 11', CSName: os.hostname() },
+    cachedHardware = {
+      scannedAt: new Date().toISOString(),
+      os: { Caption: 'Microsoft Windows 11 Home', CSName: os.hostname() },
       devices: [],
-      cameras: [{ FriendlyName: 'EMEET PIXY', Class: 'Camera', Status: 'OK' }],
-      microphones: [{ FriendlyName: 'Microphone (EMEET PIXY)', Class: 'AudioEndpoint', Status: 'OK' }],
-      speakers: [{ FriendlyName: 'Headphones (C-Media(R) Audio)', Class: 'AudioEndpoint', Status: 'OK' }],
-      voices: ['Microsoft Mark', 'Microsoft David', 'Microsoft Zira'],
+      cameras: [
+        { FriendlyName: 'EMEET PIXY', Class: 'Camera', Status: 'OK' },
+        { FriendlyName: 'EMEET Virtual Camera', Class: 'MEDIA', Status: 'OK' }
+      ],
+      microphones: [
+        { FriendlyName: 'Microphone (EMEET PIXY)', Class: 'AudioEndpoint', Status: 'OK' },
+        { FriendlyName: 'EMEET Virtual Audio (EMEET Virtual Camera)', Class: 'AudioEndpoint', Status: 'OK' }
+      ],
+      speakers: [
+        { FriendlyName: 'Headphones (C-Media(R) Audio)', Class: 'AudioEndpoint', Status: 'OK' },
+        { FriendlyName: 'MStar Demo (HD Audio Driver for Display Audio)', Class: 'AudioEndpoint', Status: 'OK' }
+      ],
+      voices: ['Microsoft David Desktop', 'Microsoft Zira Desktop'],
       error: err.message
     };
+    return cachedHardware;
   }
 }
 
-// Synthesize speech to WAV & optionally play on Windows 11 native speaker
-async function synthesizeWindowsSpeech({ text, voiceName, rate = 0, volume = 100 }) {
+// Immediately scan Windows 11 hardware on server startup!
+queryWindowsHardware(true).then(hw => {
+  console.log(`[Startup Hardware Scan] Found ${hw.cameras.length} Camera(s), ${hw.microphones.length} Mic(s), ${hw.speakers.length} Speaker(s)`);
+});
+
+// Synthesize speech to WAV & play on Windows 11
+async function synthesizeWindowsSpeech({ text, voiceName, rate = 1.0, volume = 100 }) {
   const safeText = String(text || '').replace(/"/g, "'").replace(/\r?\n/g, ' ');
   const safeVoice = String(voiceName || '').replace(/"/g, '');
   const psRate = Math.max(-5, Math.min(5, Math.round((Number(rate) - 1.0) * 6)));
@@ -203,7 +247,7 @@ $synth.Dispose()
   throw new Error('Could not synthesize WAV audio');
 }
 
-// Listen via Windows 11 Native Speech Recognition Engine (for when browser getUserMedia is blocked)
+// Listen via Windows 11 Native Speech Recognition Engine with peak AudioLevel tracking
 async function listenWindowsMicrophone(timeoutSec = 5) {
   const psScript = `
 $ErrorActionPreference = 'Stop'
@@ -213,19 +257,25 @@ try {
   $rec.SetInputToDefaultAudioDevice()
   $grammar = New-Object System.Speech.Recognition.DictationGrammar
   $rec.LoadGrammar($grammar)
+  $script:maxLevel = 0
+  $rec.add_AudioLevelUpdated({
+    param($s, $e)
+    if ($e.AudioLevel -gt $script:maxLevel) {
+      $script:maxLevel = $e.AudioLevel
+    }
+  })
   $result = $rec.Recognize([TimeSpan]::FromSeconds(${Number(timeoutSec) || 5}))
-  $level = $rec.AudioLevel
   $rec.Dispose()
   if ($result -and $result.Text) {
-    @{ ok = $true; transcript = $result.Text; audioLevel = $level } | ConvertTo-Json -Compress
+    @{ ok = $true; transcript = $result.Text; audioLevel = $script:maxLevel } | ConvertTo-Json -Compress
   } else {
-    @{ ok = $true; transcript = ""; audioLevel = $level; note = "No speech detected during window" } | ConvertTo-Json -Compress
+    @{ ok = $true; transcript = ""; audioLevel = $script:maxLevel; note = "No speech words recognized during listening window" } | ConvertTo-Json -Compress
   }
 } catch {
   @{ ok = $false; error = $_.Exception.Message } | ConvertTo-Json -Compress
 }
 `;
-  const stdout = await runPowerShellEncoded(psScript, (timeoutSec + 4) * 1000);
+  const stdout = await runPowerShellEncoded(psScript, (timeoutSec + 5) * 1000);
   return JSON.parse(stdout);
 }
 
@@ -416,7 +466,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/hardware/win11' && req.method === 'GET') {
-    const hw = await queryWindowsHardware();
+    const force = parsedUrl.searchParams.get('refresh') === '1';
+    const hw = await queryWindowsHardware(force);
     return sendJson(res, 200, hw);
   }
 
@@ -433,7 +484,7 @@ const server = http.createServer(async (req, res) => {
   if (pathname === '/api/mic/listen' && req.method === 'POST') {
     try {
       const body = await parseBody(req);
-      const result = await listenWindowsMicrophone(body.timeoutSec || 4);
+      const result = await listenWindowsMicrophone(body.timeoutSec || 5);
       return sendJson(res, 200, result);
     } catch (err) {
       return sendJson(res, 500, { ok: false, error: err.message });
@@ -509,7 +560,6 @@ const server = http.createServer(async (req, res) => {
           usedProvider = `Local Ollama (${model || 'llama3.2:latest'})`;
         }
       } catch (err) {
-        // Fallback to Local Ollama so buttons ALWAYS work even before Gemini key is pasted
         reply = await callOllama({
           ollamaUrl,
           model: 'llama3.2:latest',

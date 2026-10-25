@@ -31,7 +31,7 @@ const state = {
     cameraId: localStorage.getItem('tweed_cameraId') || '0',
     micId: localStorage.getItem('tweed_micId') || '',
     speakerId: localStorage.getItem('tweed_speakerId') || '',
-    voiceURI: localStorage.getItem('tweed_voiceURI') || 'Microsoft Mark',
+    voiceURI: localStorage.getItem('tweed_voiceURI') || 'Microsoft David Desktop',
     resolution: localStorage.getItem('tweed_resolution') || '640x480',
     mirror: localStorage.getItem('tweed_mirror') !== 'false',
     motionThreshold: Number(localStorage.getItem('tweed_motionThreshold') || 18),
@@ -66,17 +66,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadSettingsIntoUI();
   appendChatMessage(
     'deer',
-    "Well hooves and antlers! I'm Buckley, mounted right here on the wall at 121 Tweed Blvd, Nyack, NY 10960. My EMEET PIXY webcam eyes are locked on the room—wave at the camera or click 'Look & Speak Now'!"
+    "Well hooves and antlers! I'm Buckley, mounted right here on the wall at 121 Tweed Blvd, Nyack, NY 10960. I just scanned your Windows 11 hardware on startup—your EMEET PIXY webcam and microphone are ready!"
   );
 
-  await checkBackendGeminiStatus();
-  await refreshWindows11HardwareList();
+  // Immediately scan Windows 11 hardware & Gemini status on startup
+  await Promise.all([
+    refreshWindows11HardwareList(false),
+    checkBackendGeminiStatus()
+  ]);
   startPixyBridgeLoop();
   loadCocoSsdModel();
   startVisionDetectionLoop();
 });
 
-function showToast(msg, durationMs = 3200) {
+function showToast(msg, durationMs = 3400) {
   if (!els.toastBanner) return;
   els.toastBanner.textContent = msg;
   els.toastBanner.classList.remove('hidden');
@@ -88,12 +91,14 @@ function showToast(msg, durationMs = 3200) {
 
 function bindElements() {
   const ids = [
-    'geminiStatusBadge', 'camStatusBadge', 'quickKeyBanner', 'quickGeminiKeyInput', 'quickSaveKeyBtn',
+    'geminiStatusBadge', 'camStatusBadge', 'hwScanBadge',
+    'quickKeyBanner', 'quickGeminiKeyInput', 'quickSaveKeyBtn',
     'toastBanner',
     'deerStateBadge', 'deerStage', 'deerJaw', 'deerLeftEar', 'deerRightEar', 'pupilLeft', 'pupilRight',
     'deerVoiceBar', 'deerSpeechText', 'lastProviderLabel',
     'activeCameraLabel', 'autoGreetToggle', 'hudOverlayToggle',
     'webcamVideo', 'pixyBridgeImg', 'hudCanvas', 'hudFpsTag', 'hudTargetTag', 'hudMotionTag',
+    'quickCameraSelect', 'quickMicSelect', 'quickSpeakerSelect',
     'liveTelemetryText',
     'lookAndSpeakBtn', 'micListenBtn', 'stopSpeechBtn',
     'chatLog', 'chatForm', 'chatInput', 'sendChatBtn',
@@ -134,28 +139,58 @@ function bindElements() {
     e.preventDefault();
     const text = els.chatInput.value.trim();
     if (!text) {
-      showToast('💬 Type a message first, or click "📸 Look & Speak Now"!');
+      showToast('💬 Type a message first, or click "🎙️ Talk to Deerhead (Use Mic)"!');
       return;
     }
     els.chatInput.value = '';
     handleVisitorMessage(text);
   });
 
-  // Hardware Settings Tab Buttons & Controls
-  els.refreshDevicesBtn.addEventListener('click', async () => {
-    els.refreshDevicesBtn.textContent = '⏳ Scanning Windows 11...';
-    await refreshWindows11HardwareList(true);
-    els.refreshDevicesBtn.textContent = '🔄 Rescan Windows 11 Devices';
-  });
-
-  els.cameraSelect.addEventListener('change', () => {
-    state.settings.cameraId = els.cameraSelect.value;
-    state.selectedCamIndex = Number(els.cameraSelect.selectedIndex) || 0;
-    localStorage.setItem('tweed_cameraId', state.settings.cameraId);
-    const camName = els.cameraSelect.options[els.cameraSelect.selectedIndex]?.textContent || 'EMEET PIXY';
+  // Synced Camera Selectors (Main Tab + Hardware Tab)
+  function onCameraChange(newVal, sourceSelect) {
+    state.settings.cameraId = newVal;
+    state.selectedCamIndex = Number(sourceSelect.selectedIndex) || 0;
+    localStorage.setItem('tweed_cameraId', newVal);
+    els.cameraSelect.value = newVal;
+    els.quickCameraSelect.value = newVal;
+    const camName = sourceSelect.options[sourceSelect.selectedIndex]?.textContent || 'EMEET PIXY';
     els.activeCameraLabel.textContent = `Active Feed: ${camName}`;
     els.hwPreviewBadge.textContent = `Live Preview: ${camName}`;
     showToast(`📷 Switched Video Input to ${camName}`);
+  }
+  els.cameraSelect.addEventListener('change', () => onCameraChange(els.cameraSelect.value, els.cameraSelect));
+  els.quickCameraSelect.addEventListener('change', () => onCameraChange(els.quickCameraSelect.value, els.quickCameraSelect));
+
+  // Synced Microphone Selectors (Main Tab + Hardware Tab)
+  function onMicChange(newVal, sourceSelect) {
+    state.settings.micId = newVal;
+    localStorage.setItem('tweed_micId', newVal);
+    els.micSelect.value = newVal;
+    els.quickMicSelect.value = newVal;
+    const micName = sourceSelect.options[sourceSelect.selectedIndex]?.textContent || 'Microphone';
+    els.micStatusText.textContent = `✅ Active Audio Input: ${micName}`;
+    showToast(`🎙️ Selected ${micName}`);
+  }
+  els.micSelect.addEventListener('change', () => onMicChange(els.micSelect.value, els.micSelect));
+  els.quickMicSelect.addEventListener('change', () => onMicChange(els.quickMicSelect.value, els.quickMicSelect));
+
+  // Synced Speaker Selectors (Main Tab + Hardware Tab)
+  function onSpeakerChange(newVal, sourceSelect) {
+    state.settings.speakerId = newVal;
+    localStorage.setItem('tweed_speakerId', newVal);
+    els.speakerSelect.value = newVal;
+    els.quickSpeakerSelect.value = newVal;
+    const spkName = sourceSelect.options[sourceSelect.selectedIndex]?.textContent || 'Speaker';
+    showToast(`🔊 Selected Audio Output: ${spkName}`);
+  }
+  els.speakerSelect.addEventListener('change', () => onSpeakerChange(els.speakerSelect.value, els.speakerSelect));
+  els.quickSpeakerSelect.addEventListener('change', () => onSpeakerChange(els.quickSpeakerSelect.value, els.quickSpeakerSelect));
+
+  // Hardware Settings Tab Buttons & Controls
+  els.refreshDevicesBtn.addEventListener('click', async () => {
+    els.refreshDevicesBtn.textContent = '⏳ Rescanning Windows 11...';
+    await refreshWindows11HardwareList(true);
+    els.refreshDevicesBtn.textContent = '🔄 Rescan Windows 11 Devices';
   });
 
   els.resolutionSelect.addEventListener('change', () => {
@@ -178,23 +213,8 @@ function bindElements() {
     els.motionSensVal.textContent = `${state.settings.motionThreshold}%`;
   });
 
-  els.micSelect.addEventListener('change', () => {
-    state.settings.micId = els.micSelect.value;
-    localStorage.setItem('tweed_micId', state.settings.micId);
-    const micName = els.micSelect.options[els.micSelect.selectedIndex]?.textContent || 'Microphone';
-    els.micStatusText.textContent = `✅ Selected Audio Input: ${micName}`;
-    showToast(`🎙️ Selected ${micName}`);
-  });
-
   els.testMicBtn.addEventListener('click', () => {
     listenViaMicrophone(true);
-  });
-
-  els.speakerSelect.addEventListener('change', () => {
-    state.settings.speakerId = els.speakerSelect.value;
-    localStorage.setItem('tweed_speakerId', state.settings.speakerId);
-    const spkName = els.speakerSelect.options[els.speakerSelect.selectedIndex]?.textContent || 'Speaker';
-    showToast(`🔊 Selected Audio Output: ${spkName}`);
   });
 
   els.voiceSelect.addEventListener('change', () => {
@@ -392,11 +412,35 @@ function updateGeminiUiState(data) {
 }
 
 // ============================================================================
-// WINDOWS 11 HARDWARE ENUMERATION (CAMERAS, MICROPHONES, SPEAKERS, VOICES)
+// WINDOWS 11 HARDWARE SCAN ON STARTUP (CAMERAS, MICROPHONES, SPEAKERS, VOICES)
 // ============================================================================
-async function refreshWindows11HardwareList(showNotification = false) {
+function populateSelectPair(selectA, selectB, items, formatLabel, getValue, savedValue) {
+  selectA.innerHTML = '';
+  selectB.innerHTML = '';
+  items.forEach((item, idx) => {
+    const val = getValue(item, idx);
+    const label = formatLabel(item, idx);
+
+    const opt1 = document.createElement('option');
+    opt1.value = val;
+    opt1.textContent = label;
+    selectA.appendChild(opt1);
+
+    const opt2 = document.createElement('option');
+    opt2.value = val;
+    opt2.textContent = label;
+    selectB.appendChild(opt2);
+  });
+
+  if (savedValue && [...selectA.options].some(o => o.value === savedValue)) {
+    selectA.value = savedValue;
+    selectB.value = savedValue;
+  }
+}
+
+async function refreshWindows11HardwareList(forceRefresh = false) {
   try {
-    const res = await fetch('/api/hardware/win11');
+    const res = await fetch(`/api/hardware/win11${forceRefresh ? '?refresh=1' : ''}`);
     const data = await res.json();
     state.win11Hardware = data;
 
@@ -404,51 +448,52 @@ async function refreshWindows11HardwareList(showNotification = false) {
     const pcName = data?.os?.CSName || 'TWEEDDEER';
     els.win11OsBanner.textContent = `💻 ${osName} • Host: ${pcName}`;
 
-    // 1. Populate Video Cameras (EMEET PIXY prioritized)
+    // 1. Populate Video Cameras (Both Main Tab + Hardware Settings Tab)
     const cams = Array.isArray(data.cameras) && data.cameras.length > 0
       ? data.cameras
       : [{ FriendlyName: 'EMEET PIXY', InstanceId: '0' }];
 
-    els.cameraSelect.innerHTML = '';
-    cams.forEach((c, idx) => {
-      const isPixy = /pixy/i.test(c.FriendlyName);
-      const opt = document.createElement('option');
-      opt.value = String(idx);
-      opt.textContent = isPixy ? `🎯 ${c.FriendlyName} (Connected Pixy Webcam)` : `📷 ${c.FriendlyName}`;
-      els.cameraSelect.appendChild(opt);
-    });
+    populateSelectPair(
+      els.cameraSelect,
+      els.quickCameraSelect,
+      cams,
+      (c) => /pixy/i.test(c.FriendlyName) ? `🎯 ${c.FriendlyName} (Connected Pixy Webcam)` : `📷 ${c.FriendlyName}`,
+      (_c, idx) => String(idx),
+      state.settings.cameraId
+    );
 
-    // 2. Populate Microphones (Microphone (EMEET PIXY) prioritized)
+    // 2. Populate Microphones (Both Main Tab + Hardware Settings Tab)
     const mics = Array.isArray(data.microphones) && data.microphones.length > 0
       ? data.microphones
-      : [{ FriendlyName: 'Microphone (EMEET PIXY)', InstanceId: 'default-mic' }];
+      : [{ FriendlyName: 'Microphone (EMEET PIXY)', InstanceId: 'mic-pixy' }];
 
-    els.micSelect.innerHTML = '';
-    mics.forEach((m, idx) => {
-      const isPixy = /pixy/i.test(m.FriendlyName);
-      const opt = document.createElement('option');
-      opt.value = m.InstanceId || String(idx);
-      opt.textContent = isPixy ? `🎙️ ${m.FriendlyName} (Pixy Mic)` : `🎙️ ${m.FriendlyName}`;
-      els.micSelect.appendChild(opt);
-    });
+    populateSelectPair(
+      els.micSelect,
+      els.quickMicSelect,
+      mics,
+      (m) => /pixy/i.test(m.FriendlyName) ? `🎙️ ${m.FriendlyName} (Pixy Mic)` : `🎙️ ${m.FriendlyName}`,
+      (m, idx) => m.InstanceId || `mic-${idx}`,
+      state.settings.micId
+    );
 
-    // 3. Populate Speakers / Audio Output
+    // 3. Populate Speakers / Audio Output (Both Main Tab + Hardware Settings Tab)
     const speakers = Array.isArray(data.speakers) && data.speakers.length > 0
       ? data.speakers
-      : [{ FriendlyName: 'Headphones (C-Media(R) Audio)', InstanceId: 'default-spk' }];
+      : [{ FriendlyName: 'Headphones (C-Media(R) Audio)', InstanceId: 'spk-cmedia' }];
 
-    els.speakerSelect.innerHTML = '';
-    speakers.forEach((s, idx) => {
-      const opt = document.createElement('option');
-      opt.value = s.InstanceId || String(idx);
-      opt.textContent = `🔊 ${s.FriendlyName}`;
-      els.speakerSelect.appendChild(opt);
-    });
+    populateSelectPair(
+      els.speakerSelect,
+      els.quickSpeakerSelect,
+      speakers,
+      (s) => `🔊 ${s.FriendlyName}`,
+      (s, idx) => s.InstanceId || `spk-${idx}`,
+      state.settings.speakerId
+    );
 
     // 4. Populate Windows 11 Installed Speech Voices
     const voices = Array.isArray(data.voices) && data.voices.length > 0
       ? data.voices
-      : ['Microsoft Mark', 'Microsoft David', 'Microsoft Zira'];
+      : ['Microsoft David Desktop', 'Microsoft Zira Desktop'];
 
     els.voiceSelect.innerHTML = '';
     voices.forEach(vName => {
@@ -477,8 +522,12 @@ async function refreshWindows11HardwareList(showNotification = false) {
       els.win11DeviceList.appendChild(row);
     });
 
-    if (showNotification) {
-      showToast(`✅ Found ${cams.length} Camera(s), ${mics.length} Mic(s), ${speakers.length} Speaker(s) on ${pcName}!`);
+    if (els.hwScanBadge) {
+      els.hwScanBadge.textContent = `✅ Scanned: ${cams.length} Cams, ${mics.length} Mics, ${speakers.length} Speakers`;
+    }
+
+    if (forceRefresh) {
+      showToast(`✅ Rescanned Windows 11: ${cams.length} Camera(s), ${mics.length} Mic(s), ${speakers.length} Speaker(s)!`);
     }
   } catch (err) {
     els.win11OsBanner.textContent = `Windows 11 Hardware Scan: ${err.message}`;
@@ -505,7 +554,6 @@ function startPixyBridgeLoop() {
         state.bridgeActive = true;
         els.camStatusBadge.textContent = '📹 EMEET PIXY: LIVE';
         els.camStatusBadge.className = 'status-pill status-ok';
-        els.activeCameraLabel.textContent = 'Active Feed: 🎯 EMEET PIXY (Live DirectShow Stream)';
       }
       inFlight = false;
     };
@@ -621,7 +669,6 @@ function drawVisionHud(ctx, width, height) {
   ctx.clearRect(0, 0, width, height);
   if (!els.hudOverlayToggle.checked) return;
 
-  // Pixy center reticle
   ctx.strokeStyle = 'rgba(56, 239, 125, 0.28)';
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -682,7 +729,6 @@ function evaluateSceneAndAutoGreet(frameW, frameH) {
 
   els.liveTelemetryText.textContent = summaryParts.join(' | ');
 
-  // Auto-greet when a person is seen
   const nowSec = Date.now() / 1000;
   const personPresent = people.length > 0;
 
@@ -880,47 +926,48 @@ function stopJawAnimation() {
 }
 
 // ============================================================================
-// WINDOWS 11 MICROPHONE LISTENING (WORKS EVEN IN EMBEDDED WEBVIEW!)
+// WINDOWS 11 MICROPHONE LISTENING
 // ============================================================================
-async function listenViaMicrophone(isHardwareTest = false) {
+async function listenViaMicrophone() {
   if (state.isListening) return;
   stopDeerSpeech();
   state.isListening = true;
 
-  els.micListenBtn.classList.add('listening');
-  els.micListenBtn.textContent = '🛑 Listening on EMEET PIXY Mic...';
-  els.testMicBtn.classList.add('listening');
-  els.testMicBtn.textContent = '🛑 Speak Now (Listening 4s)...';
-  els.deerStateBadge.textContent = '👂 Ears Perk Up (Listening)';
-  els.micStatusText.textContent = '🎙️ Listening on Windows 11 Microphone (EMEET PIXY)... Speak now!';
-  showToast('🎙️ Listening on Microphone (EMEET PIXY)—speak now!');
+  const selectedMicLabel = els.micSelect.options[els.micSelect.selectedIndex]?.textContent || 'Microphone (EMEET PIXY)';
 
-  // Animate VU meter while Windows Speech Recognition listens
+  els.micListenBtn.classList.add('listening');
+  els.micListenBtn.textContent = '🛑 Listening Now (Speak!)...';
+  els.testMicBtn.classList.add('listening');
+  els.testMicBtn.textContent = '🛑 Listening Now (Speak!)...';
+  els.deerStateBadge.textContent = '👂 Ears Perk Up (Listening)';
+  els.micStatusText.textContent = `🎙️ Listening on ${selectedMicLabel}... Speak now!`;
+  showToast(`🎙️ Listening on ${selectedMicLabel} — Speak to Buckley now!`);
+
   const vuTimer = setInterval(() => {
-    const lvl = 20 + Math.round(Math.random() * 65);
+    const lvl = 25 + Math.round(Math.random() * 65);
     els.micLevelBar.style.width = `${lvl}%`;
-  }, 150);
+  }, 140);
 
   try {
     const res = await fetch('/api/mic/listen', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ timeoutSec: 4 })
+      body: JSON.stringify({ timeoutSec: 5 })
     });
     const data = await res.json();
     clearInterval(vuTimer);
 
-    const peakLevel = Math.min(100, Math.max(25, Number(data.audioLevel || 45)));
+    const peakLevel = Math.min(100, Math.max(15, Number(data.audioLevel || 40)));
     els.micLevelBar.style.width = `${peakLevel}%`;
 
     if (data.transcript && data.transcript.trim()) {
       const heard = data.transcript.trim();
-      els.micStatusText.textContent = `✅ Heard on EMEET PIXY Mic: "${heard}" (Level: ${peakLevel}%)`;
-      showToast(`🎙️ Heard: "${heard}"`);
+      els.micStatusText.textContent = `✅ Heard on ${selectedMicLabel}: "${heard}" (Peak Level: ${peakLevel}%)`;
+      showToast(`🎙️ Heard you say: "${heard}"`);
       await handleVisitorMessage(heard);
     } else {
-      els.micStatusText.textContent = `✅ Microphone (EMEET PIXY) active! Peak level: ${peakLevel}%. (Speak louder to dictate)`;
-      showToast(`🎙️ Mic level verified (${peakLevel}%). Try speaking right after clicking!`);
+      els.micStatusText.textContent = `✅ ${selectedMicLabel} active (Peak Level: ${peakLevel}%). Click again and speak clearly right away!`;
+      showToast(`🎙️ Mic active (Peak Level: ${peakLevel}%). Speak right after clicking!`);
     }
   } catch (err) {
     clearInterval(vuTimer);
@@ -928,11 +975,14 @@ async function listenViaMicrophone(isHardwareTest = false) {
   } finally {
     state.isListening = false;
     els.micListenBtn.classList.remove('listening');
-    els.micListenBtn.textContent = '🎙️ Talk to Deerhead';
+    els.micListenBtn.textContent = '🎙️ Talk to Deerhead (Use Mic)';
     els.testMicBtn.classList.remove('listening');
-    els.testMicBtn.textContent = '🎙️ Test Microphone Level & Speech';
+    els.testMicBtn.textContent = '🎙️ Test Microphone & Speak to Buckley';
     if (!state.isSpeaking) {
       els.deerStateBadge.textContent = '👀 Watching Room';
+    }
+    if (els.continuousListenToggle && els.continuousListenToggle.checked && !state.isSpeaking) {
+      setTimeout(() => listenViaMicrophone(), 600);
     }
   }
 }

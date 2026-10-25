@@ -484,6 +484,45 @@ body {
   border: 1px solid var(--border-wood);
 }
 
+.quick-hw-strip {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.65rem;
+  background: #1a120c;
+  border: 1px solid var(--border-wood);
+  border-radius: 10px;
+  padding: 0.55rem 0.75rem;
+}
+
+@media (max-width: 900px) {
+  .quick-hw-strip {
+    grid-template-columns: 1fr;
+  }
+}
+
+.quick-hw-item {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--amber-bright);
+}
+
+.quick-hw-item label {
+  white-space: nowrap;
+}
+
+.hw-select-compact {
+  background: #110b07;
+  border: 1px solid var(--border-wood);
+  color: var(--text-main);
+  padding: 0.35rem 0.55rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  width: 100%;
+}
+
 .telemetry-readout {
   font-size: 0.85rem;
   color: var(--pixy-green);

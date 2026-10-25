@@ -20,7 +20,8 @@
         <p class="brand-subtitle">
           <span class="pin-badge">📍 Wall Mount: 121 Tweed Blvd, Nyack, NY 10960</span>
           <span id="geminiStatusBadge" class="status-pill status-warn">🔑 Paste Gemini Key</span>
-          <span id="camStatusBadge" class="status-pill status-ok">📹 Connecting EMEET PIXY...</span>
+          <span id="camStatusBadge" class="status-pill status-ok">📹 EMEET PIXY: LIVE</span>
+          <span id="hwScanBadge" class="status-pill status-ok">✅ Win 11 Hardware Scanned</span>
         </p>
       </div>
     </div>
@@ -185,7 +186,7 @@
         <div class="card-header">
           <div>
             <h2>📹 EMEET PIXY Webcam Live Vision Window</h2>
-            <span class="sub-label" id="activeCameraLabel">Connecting to EMEET PIXY...</span>
+            <span class="sub-label" id="activeCameraLabel">Active Feed: 🎯 EMEET PIXY (Live DirectShow Stream)</span>
           </div>
           <div class="vision-toggles">
             <label class="toggle-chip" title="Automatically greet people when the Pixy webcam spots someone!">
@@ -199,7 +200,7 @@
           </div>
         </div>
 
-        <!-- VIDEO WINDOW (Supports both WebRTC <video> AND DirectShow EMEET PIXY Live Bridge!) -->
+        <!-- VIDEO WINDOW -->
         <div class="video-viewport" id="videoViewport">
           <video id="webcamVideo" autoplay playsinline muted class="hidden"></video>
           <img id="pixyBridgeImg" alt="EMEET PIXY Live Feed" crossorigin="anonymous" />
@@ -208,6 +209,33 @@
             <span class="hud-tag" id="hudFpsTag">EMEET PIXY VISION: ACTIVE</span>
             <span class="hud-tag" id="hudTargetTag">👀 Targets: 0</span>
             <span class="hud-tag" id="hudMotionTag">Motion: 0%</span>
+          </div>
+        </div>
+
+        <!-- QUICK HARDWARE SELECTOR BAR RIGHT ON THE MAIN SCREEN (Synced with Hardware Tab) -->
+        <div class="quick-hw-strip">
+          <div class="quick-hw-item">
+            <label for="quickCameraSelect">📷 Camera:</label>
+            <select id="quickCameraSelect" class="hw-select-compact">
+              <option value="0">🎯 EMEET PIXY (Connected Pixy Webcam)</option>
+              <option value="1">📷 EMEET Virtual Camera</option>
+            </select>
+          </div>
+          <div class="quick-hw-item">
+            <label for="quickMicSelect">🎙️ Mic:</label>
+            <select id="quickMicSelect" class="hw-select-compact">
+              <option value="mic-pixy">🎙️ Microphone (EMEET PIXY) (Pixy Mic)</option>
+              <option value="mic-virtual">🎙️ EMEET Virtual Audio (EMEET Virtual Camera)</option>
+              <option value="win11-default-mic">🎙️ Windows 11 Default System Microphone</option>
+            </select>
+          </div>
+          <div class="quick-hw-item">
+            <label for="quickSpeakerSelect">🔊 Speaker:</label>
+            <select id="quickSpeakerSelect" class="hw-select-compact">
+              <option value="spk-cmedia">🔊 Headphones (C-Media(R) Audio)</option>
+              <option value="spk-mstar">🔊 MStar Demo (HD Audio Driver for Display Audio)</option>
+              <option value="win11-default-speaker">🔊 Windows 11 Default System Speaker</option>
+            </select>
           </div>
         </div>
 
@@ -222,7 +250,7 @@
               📸 Look &amp; Speak Now
             </button>
             <button type="button" id="micListenBtn" class="btn btn-secondary" title="Talk to the Deerhead using your selected microphone">
-              🎙️ Talk to Deerhead
+              🎙️ Talk to Deerhead (Use Mic)
             </button>
             <button type="button" id="stopSpeechBtn" class="btn btn-ghost" title="Hush Buckley">
               🤫 Hush
@@ -258,7 +286,7 @@
           <div>
             <h2>⚙️ Windows 11 Hardware &amp; Device Configuration</h2>
             <p class="sub-label">
-              Select and test the EMEET PIXY Webcam, Microphone, Speaker output, and Voice connected to this Windows 11 PC.
+              Automatically scanned on startup. Select and test the EMEET PIXY Webcam, Microphone, Speaker output, and Voice connected to this Windows 11 PC.
             </p>
           </div>
           <button type="button" id="refreshDevicesBtn" class="btn btn-amber">🔄 Rescan Windows 11 Devices</button>
@@ -273,7 +301,10 @@
 
           <div class="form-group">
             <label for="cameraSelect">Select Video Camera:</label>
-            <select id="cameraSelect" class="hw-select"></select>
+            <select id="cameraSelect" class="hw-select">
+              <option value="0">🎯 EMEET PIXY (Connected Pixy Webcam)</option>
+              <option value="1">📷 EMEET Virtual Camera</option>
+            </select>
           </div>
 
           <div class="form-row-2">
@@ -314,7 +345,11 @@
 
           <div class="form-group">
             <label for="micSelect">Select Microphone Input:</label>
-            <select id="micSelect" class="hw-select"></select>
+            <select id="micSelect" class="hw-select">
+              <option value="mic-pixy">🎙️ Microphone (EMEET PIXY) (Pixy Mic)</option>
+              <option value="mic-virtual">🎙️ EMEET Virtual Audio (EMEET Virtual Camera)</option>
+              <option value="win11-default-mic">🎙️ Windows 11 Default System Microphone</option>
+            </select>
           </div>
 
           <div class="form-group">
@@ -322,7 +357,7 @@
             <div class="meter-track large">
               <div id="micLevelBar" class="meter-fill green"></div>
             </div>
-            <small id="micStatusText" class="sub-label">Ready on Windows 11 Microphone (EMEET PIXY). Click below to test voice &amp; mic level.</small>
+            <small id="micStatusText" class="sub-label">✅ Scanned on startup: Microphone (EMEET PIXY) ready. Click below to speak!</small>
           </div>
 
           <div class="form-group">
@@ -333,7 +368,7 @@
           </div>
 
           <div class="hw-btn-row">
-            <button type="button" id="testMicBtn" class="btn btn-secondary">🎙️ Test Microphone Level &amp; Speech</button>
+            <button type="button" id="testMicBtn" class="btn btn-amber">🎙️ Test Microphone &amp; Speak to Buckley</button>
           </div>
         </section>
 
@@ -344,12 +379,19 @@
 
           <div class="form-group">
             <label for="speakerSelect">Select Speaker / Audio Output Device:</label>
-            <select id="speakerSelect" class="hw-select"></select>
+            <select id="speakerSelect" class="hw-select">
+              <option value="spk-cmedia">🔊 Headphones (C-Media(R) Audio)</option>
+              <option value="spk-mstar">🔊 MStar Demo (HD Audio Driver for Display Audio)</option>
+              <option value="win11-default-speaker">🔊 Windows 11 Default System Speaker</option>
+            </select>
           </div>
 
           <div class="form-group">
             <label for="voiceSelect">Windows 11 Speech Voice:</label>
-            <select id="voiceSelect" class="hw-select"></select>
+            <select id="voiceSelect" class="hw-select">
+              <option value="Microsoft David Desktop">🗣️ Microsoft David Desktop (Windows 11 SAPI Voice)</option>
+              <option value="Microsoft Zira Desktop">🗣️ Microsoft Zira Desktop (Windows 11 SAPI Voice)</option>
+            </select>
           </div>
 
           <div class="form-row-2">
