@@ -1,0 +1,21 @@
+{
+  "name": "tweed-deerhead",
+  "version": "1.0.0",
+  "description": "Interactive AI Mounted Deerhead at 121 Tweed Blvd, Nyack, NY 10960 with Pixy Webcam Vision & Windows 11 Hardware Controls",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "deerhead",
+    "pixy",
+    "webcam",
+    "nyack",
+    "tweed-blvd",
+    "ai-vision",
+    "animatronic",
+    "windows-11"
+  ],
+  "author": "121 Tweed Blvd, Nyack, NY 10960",
+  "license": "MIT"
+}

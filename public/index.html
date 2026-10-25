@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TweedDeerhead — 121 Tweed Blvd, Nyack, NY 10960</title>
+  <link rel="stylesheet" href="styles.css" />
+  <!-- TensorFlow.js + COCO-SSD for real-time Person & Object Detection in the Pixy Video Window -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <!-- TOP HEADER & NAVIGATION TABS -->
+  <header class="top-header">
+    <div class="brand-block">
+      <div class="brand-emblem" title="Mounted at 121 Tweed Blvd, Nyack, NY 10960">🦌</div>
+      <div>
+        <h1 class="brand-title">TWEED DEERHEAD</h1>
+        <p class="brand-subtitle">
+          <span class="pin-badge">📍 Wall Mount: 121 Tweed Blvd, Nyack, NY 10960</span>
+          <span id="geminiStatusBadge" class="status-pill status-warn">Gemini Key Needed</span>
+          <span id="camStatusBadge" class="status-pill status-neutral">Camera Initializing...</span>
+        </p>
+      </div>
+    </div>
+
+    <!-- TOP NAVIGATION TABS -->
+    <nav class="top-tabs" role="tablist" aria-label="Main Navigation">
+      <button class="tab-btn active" data-tab="tab-live" role="tab" aria-selected="true">
+        🦌 Live Deerhead &amp; Pixy Vision
+      </button>
+      <button class="tab-btn" data-tab="tab-hardware" role="tab" aria-selected="false">
+        ⚙️ Hardware Settings (Win 11)
+      </button>
+      <button class="tab-btn" data-tab="tab-gemini" role="tab" aria-selected="false">
+        🧠 Google Gemini &amp; Persona
+      </button>
+    </nav>
+  </header>
+
+  <!-- QUICK GEMINI API KEY BAR (Shown until key is saved) -->
+  <div id="quickKeyBanner" class="quick-key-banner">
+    <div class="quick-key-inner">
+      <span>🔑 <strong>Google Gemini Vision Backend:</strong> Paste your Google Gemini API Key to activate live visual conversation:</span>
+      <div class="quick-key-form">
+        <input type="password" id="quickGeminiKeyInput" placeholder="AIzaSy..." autocomplete="off" />
+        <button id="quickSaveKeyBtn" class="btn btn-amber">Save &amp; Connect Gemini</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       TAB 1: LIVE DEERHEAD & PIXY WEBCAM VISION WINDOW
+       ===================================================================== -->
+  <main id="tab-live" class="tab-panel active" role="tabpanel">
+    <div class="live-grid">
+
+      <!-- LEFT COLUMN: ANIMATED MOUNTED DEERHEAD ON WALL AT 121 TWEED BLVD -->
+      <section class="card deer-wall-card">
+        <div class="card-header">
+          <div>
+            <h2>🪵 The Wall at 121 Tweed Blvd, Nyack, NY 10960</h2>
+            <span class="sub-label">"Buckley" — Interactive Animatronic Trophy Stag</span>
+          </div>
+          <div class="deer-mood-badge" id="deerStateBadge">👀 Watching Room</div>
+        </div>
+
+        <div class="wall-backdrop">
+          <div class="plaque-brass-plate">
+            BUCKLEY • THE TWEED BLVD STAG<br />
+            <small>MOUNTED AT 121 TWEED BLVD, NYACK, NY 10960</small>
+          </div>
+
+          <!-- SVG ANIMATED DEERHEAD ON OAK PLAQUE -->
+          <div class="deer-stage" id="deerStage">
+            <svg id="deerSvg" viewBox="0 0 420 430" xmlns="http://www.w3.org/2000/svg" aria-label="Animated Mounted Deerhead">
+              <defs>
+                <radialGradient id="plaqueWood" cx="50%" cy="45%" r="55%">
+                  <stop offset="0%" stop-color="#6e411f" />
+                  <stop offset="70%" stop-color="#472810" />
+                  <stop offset="100%" stop-color="#2b1607" />
+                </radialGradient>
+                <linearGradient id="furMain" x1="0%" y1="0%" x2="0%" y2="100%">
+                  <stop offset="0%" stop-color="#b67e48" />
+                  <stop offset="60%" stop-color="#8f5c2c" />
+                  <stop offset="100%" stop-color="#69401a" />
+                </linearGradient>
+                <linearGradient id="antlerGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#f2e2c4" />
+                  <stop offset="70%" stop-color="#cbb286" />
+                  <stop offset="100%" stop-color="#8f754c" />
+                </linearGradient>
+              </defs>
+
+              <!-- Carved Oak Shield Plaque -->
+              <path d="M 210 38 C 325 38, 365 115, 355 235 C 345 340, 275 395, 210 412 C 145 395, 75 340, 65 235 C 55 115, 95 38, 210 38 Z"
+                    fill="url(#plaqueWood)" stroke="#b88940" stroke-width="6" />
+              <path d="M 210 52 C 310 52, 348 122, 338 232 C 329 327, 265 378, 210 394 C 155 378, 91 327, 82 232 C 72 122, 110 52, 210 52 Z"
+                    fill="none" stroke="#331a08" stroke-width="3" stroke-dasharray="8,4" />
+
+              <!-- Antlers (Left & Right 10-Point Rack) -->
+              <g id="deerAntlers" class="deer-antlers">
+                <!-- Left Antler -->
+                <path d="M 168 148 C 130 110, 82 95, 56 54 C 45 35, 55 20, 66 36 C 75 52, 95 72, 116 84
+                         M 110 82 C 98 55, 96 34, 108 18 C 116 8, 126 18, 120 38 C 115 58, 118 75, 130 92
+                         M 138 102 C 136 74, 144 52, 156 42 C 164 35, 172 45, 162 64 C 152 84, 152 104, 162 122"
+                      fill="none" stroke="url(#antlerGrad)" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" />
+                <!-- Right Antler -->
+                <path d="M 252 148 C 290 110, 338 95, 364 54 C 375 35, 365 20, 354 36 C 345 52, 325 72, 304 84
+                         M 310 82 C 322 55, 324 34, 312 18 C 304 8, 294 18, 300 38 C 305 58, 302 75, 290 92
+                         M 282 102 C 284 74, 276 52, 264 42 C 256 35, 248 45, 258 64 C 268 84, 268 104, 258 122"
+                      fill="none" stroke="url(#antlerGrad)" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" />
+              </g>
+
+              <!-- Neck & Chest Tuft Mounted to Plaque -->
+              <path d="M 145 265 Q 130 345 155 382 Q 210 402 265 382 Q 290 345 275 265 Z" fill="url(#furMain)" stroke="#4a2c10" stroke-width="3" />
+              <!-- White Throat Patch -->
+              <path d="M 172 282 Q 210 315 248 282 Q 238 355 210 368 Q 182 355 172 282 Z" fill="#f5ead6" opacity="0.92" />
+
+              <!-- Ears (Animated) -->
+              <g id="deerLeftEar" class="deer-ear-left">
+                <path d="M 152 168 C 102 142, 74 162, 86 196 C 98 220, 134 210, 158 192 Z" fill="url(#furMain)" stroke="#4a2c10" stroke-width="3" />
+                <path d="M 145 175 C 110 158, 92 170, 98 190 C 106 205, 130 198, 148 186 Z" fill="#dfb995" />
+              </g>
+              <g id="deerRightEar" class="deer-ear-right">
+                <path d="M 268 168 C 318 142, 346 162, 334 196 C 322 220, 286 210, 262 192 Z" fill="url(#furMain)" stroke="#4a2c10" stroke-width="3" />
+                <path d="M 275 175 C 310 158, 328 170, 322 190 C 314 205, 290 198, 272 186 Z" fill="#dfb995" />
+              </g>
+
+              <!-- Head & Snout -->
+              <path d="M 152 155 C 145 118, 275 118, 268 155 C 282 205, 265 265, 242 292 C 225 310, 195 310, 178 292 C 155 265, 138 205, 152 155 Z"
+                    fill="url(#furMain)" stroke="#4a2c10" stroke-width="3.5" />
+
+              <!-- Forehead Bridge Marking -->
+              <path d="M 192 145 Q 210 210 202 260 L 218 260 Q 210 210 228 145 Z" fill="#6b421b" opacity="0.65" />
+
+              <!-- Eyes (Track Visitors!) -->
+              <g class="deer-eyes">
+                <!-- Left Eye -->
+                <ellipse cx="174" cy="202" rx="14" ry="11" fill="#fffdf9" stroke="#2d1908" stroke-width="3" />
+                <circle id="pupilLeft" cx="174" cy="202" r="7" fill="#1e1208" />
+                <circle cx="171" cy="199" r="2.5" fill="#ffffff" />
+                <!-- Right Eye -->
+                <ellipse cx="246" cy="202" rx="14" ry="11" fill="#fffdf9" stroke="#2d1908" stroke-width="3" />
+                <circle id="pupilRight" cx="246" cy="202" r="7" fill="#1e1208" />
+                <circle cx="243" cy="199" r="2.5" fill="#ffffff" />
+              </g>
+
+              <!-- Lower Jaw / Talking Mouth (Moves dynamically with voice amplitude!) -->
+              <g id="deerJaw" class="deer-jaw">
+                <path d="M 178 282 Q 210 326 242 282 Q 232 318 210 322 Q 188 318 178 282 Z" fill="#593515" stroke="#3b210b" stroke-width="2.5" />
+                <ellipse cx="210" cy="296" rx="18" ry="10" fill="#2a0d0d" />
+                <ellipse cx="210" cy="300" rx="11" ry="5" fill="#d46a6a" />
+              </g>
+
+              <!-- Upper Muzzle & Nose -->
+              <path d="M 176 258 Q 210 245 244 258 Q 248 288 210 292 Q 172 288 176 258 Z" fill="#e8dac3" stroke="#4a2c10" stroke-width="2" />
+              <ellipse cx="210" cy="268" rx="18" ry="12" fill="#1d1410" />
+              <ellipse cx="204" cy="264" rx="5" ry="2.5" fill="#57473f" />
+            </svg>
+
+            <!-- Voice Amplitude Equalizer Bar -->
+            <div class="voice-meter-wrap" title="Deerhead Voice Output Level">
+              <span>🗣️ Jaw Servo / Voice Level</span>
+              <div class="meter-track">
+                <div id="deerVoiceBar" class="meter-fill"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- CURRENT SPEECH BUBBLE -->
+          <div class="speech-bubble" id="deerSpeechBubble">
+            <div class="speech-meta">
+              <strong>🦌 Buckley (121 Tweed Blvd):</strong>
+              <span id="lastProviderLabel">Ready</span>
+            </div>
+            <p id="deerSpeechText">
+              "Well hooves and antlers! I'm mounted right here on the wall at 121 Tweed Blvd in Nyack, NY 10960! Step in front of my Pixy webcam so I can get a good look at you!"
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- RIGHT COLUMN: LIVE PIXY WEBCAM VIDEO WINDOW & CONVERSATION -->
+      <section class="card video-chat-card">
+        <div class="card-header">
+          <div>
+            <h2>📹 Pixy Webcam Live Vision Window</h2>
+            <span class="sub-label" id="activeCameraLabel">Detecting connected webcam...</span>
+          </div>
+          <div class="vision-toggles">
+            <label class="toggle-chip" title="Automatically greet people when the Pixy webcam spots someone!">
+              <input type="checkbox" id="autoGreetToggle" checked />
+              <span>👋 Auto-Talk When Person Seen</span>
+            </label>
+            <label class="toggle-chip" title="Show Pixy bounding boxes & motion tracking overlay">
+              <input type="checkbox" id="hudOverlayToggle" checked />
+              <span>🎯 Pixy HUD</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- VIDEO WINDOW -->
+        <div class="video-viewport" id="videoViewport">
+          <video id="webcamVideo" autoplay playsinline muted></video>
+          <canvas id="hudCanvas"></canvas>
+          <div class="video-hud-top">
+            <span class="hud-tag" id="hudFpsTag">PIXY VISION: ACTIVE</span>
+            <span class="hud-tag" id="hudTargetTag">👀 Targets: 0</span>
+            <span class="hud-tag" id="hudMotionTag">Motion: 0%</span>
+          </div>
+          <div id="videoPlaceholder" class="video-placeholder hidden">
+            <p>📷 No video stream active. Check permissions or select your Pixy Webcam in the <strong>Hardware Settings (Win 11)</strong> tab above.</p>
+            <button id="retryCameraBtn" class="btn btn-amber">Start Webcam</button>
+          </div>
+        </div>
+
+        <!-- VISION TELEMETRY & ACTION BAR -->
+        <div class="vision-action-bar">
+          <div class="telemetry-readout">
+            <strong>What Buckley Sees:</strong>
+            <span id="liveTelemetryText">Scanning room at 121 Tweed Blvd...</span>
+          </div>
+          <div class="action-buttons">
+            <button id="lookAndSpeakBtn" class="btn btn-amber" title="Capture a frame from the Pixy webcam and make the Deerhead comment on what it sees!">
+              📸 Look &amp; Speak Now
+            </button>
+            <button id="micListenBtn" class="btn btn-secondary" title="Talk to the Deerhead using your selected microphone">
+              🎙️ Talk to Deerhead
+            </button>
+            <button id="stopSpeechBtn" class="btn btn-ghost" title="Hush Buckley">
+              🤫 Hush
+            </button>
+          </div>
+        </div>
+
+        <!-- CHAT / CONVERSATION LOG & INPUT -->
+        <div class="chat-section">
+          <div class="chat-log" id="chatLog"></div>
+          <form id="chatForm" class="chat-input-row">
+            <input
+              type="text"
+              id="chatInput"
+              placeholder="Say something to Buckley on the wall at 121 Tweed Blvd (or click 🎙️ Talk)..."
+              autocomplete="off"
+            />
+            <button type="submit" id="sendChatBtn" class="btn btn-amber">Send &amp; Include Webcam Frame</button>
+          </form>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <!-- =====================================================================
+       TAB 2: HARDWARE SETTINGS (WINDOWS 11 DEVICES: WEBCAM, MIC, SPEAKER)
+       ===================================================================== -->
+  <main id="tab-hardware" class="tab-panel" role="tabpanel">
+    <div class="hardware-container">
+      <div class="card hardware-header-card">
+        <div class="card-header">
+          <div>
+            <h2>⚙️ Windows 11 Hardware &amp; Device Configuration</h2>
+            <p class="sub-label">
+              Select and test the Pixy Webcam, Microphone, Speaker output, and Voice connected to this Windows 11 PC.
+            </p>
+          </div>
+          <button id="refreshDevicesBtn" class="btn btn-amber">🔄 Rescan Windows 11 Devices</button>
+        </div>
+      </div>
+
+      <div class="hardware-grid">
+        <!-- 1. WEBCAM / PIXY CAMERA SETTINGS -->
+        <section class="card hw-card">
+          <h3>📷 1. Video Input (Pixy Webcam / USB Camera)</h3>
+          <p class="hw-help">Pixy cameras in UVC/Webcam mode and USB webcams connected to Windows 11 are automatically detected.</p>
+
+          <div class="form-group">
+            <label for="cameraSelect">Select Video Camera:</label>
+            <select id="cameraSelect" class="hw-select"></select>
+          </div>
+
+          <div class="form-row-2">
+            <div class="form-group">
+              <label for="resolutionSelect">Target Resolution:</label>
+              <select id="resolutionSelect" class="hw-select">
+                <option value="640x480">640 × 480 (Pixy Fast / Low Latency)</option>
+                <option value="1280x720" selected>1280 × 720 (HD 720p)</option>
+                <option value="1920x1080">1920 × 1080 (Full HD 1080p)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="mirrorVideoToggle">Video Orientation:</label>
+              <select id="mirrorVideoToggle" class="hw-select">
+                <option value="true" selected>Mirrored (Natural Wall View)</option>
+                <option value="false">Normal (Unmirrored)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="motionSensitivityRange">
+              Pixy Motion Trigger Sensitivity: <strong id="motionSensVal">Medium (18%)</strong>
+            </label>
+            <input type="range" id="motionSensitivityRange" min="5" max="50" value="18" />
+          </div>
+
+          <div class="hw-preview-box">
+            <video id="hwCameraPreview" autoplay playsinline muted></video>
+            <span class="preview-badge">Live Hardware Feed Preview</span>
+          </div>
+        </section>
+
+        <!-- 2. MICROPHONE SETTINGS -->
+        <section class="card hw-card">
+          <h3>🎙️ 2. Audio Input (Microphone)</h3>
+          <p class="hw-help">Choose which Windows 11 microphone listens when visitors talk to the Deerhead on the wall.</p>
+
+          <div class="form-group">
+            <label for="micSelect">Select Microphone Input:</label>
+            <select id="micSelect" class="hw-select"></select>
+          </div>
+
+          <div class="form-group">
+            <label>Live Microphone Input Level (VU Meter):</label>
+            <div class="meter-track large">
+              <div id="micLevelBar" class="meter-fill green"></div>
+            </div>
+            <small id="micStatusText" class="sub-label">Click "Test Microphone" to check live input levels.</small>
+          </div>
+
+          <div class="form-group">
+            <label class="toggle-chip">
+              <input type="checkbox" id="continuousListenToggle" />
+              <span>Keep Microphone Listening Continuously (Hands-Free Mode)</span>
+            </label>
+          </div>
+
+          <div class="hw-btn-row">
+            <button id="testMicBtn" class="btn btn-secondary">🎙️ Test Microphone Level</button>
+          </div>
+        </section>
+
+        <!-- 3. SPEAKER & VOICE SYNTHESIS SETTINGS -->
+        <section class="card hw-card">
+          <h3>🔊 3. Audio Output (Speaker &amp; Deerhead Voice)</h3>
+          <p class="hw-help">Select the Windows 11 speaker/audio output device and customize Buckley's voice.</p>
+
+          <div class="form-group">
+            <label for="speakerSelect">Select Speaker / Audio Output Device:</label>
+            <select id="speakerSelect" class="hw-select"></select>
+          </div>
+
+          <div class="form-group">
+            <label for="voiceSelect">Windows 11 Speech Voice:</label>
+            <select id="voiceSelect" class="hw-select"></select>
+          </div>
+
+          <div class="form-row-2">
+            <div class="form-group">
+              <label for="voicePitchRange">Voice Pitch (<span id="pitchVal">0.85</span>):</label>
+              <input type="range" id="voicePitchRange" min="0.5" max="1.4" step="0.05" value="0.85" />
+            </div>
+            <div class="form-group">
+              <label for="voiceRateRange">Speech Rate (<span id="rateVal">1.00</span>):</label>
+              <input type="range" id="voiceRateRange" min="0.7" max="1.35" step="0.05" value="1.0" />
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="speakerVolumeRange">Speaker Output Volume (<span id="volVal">100%</span>):</label>
+            <input type="range" id="speakerVolumeRange" min="0" max="100" value="100" />
+          </div>
+
+          <div class="hw-btn-row">
+            <button id="testSpeakerBtn" class="btn btn-amber">🔊 Test Speaker &amp; Deerhead Voice</button>
+          </div>
+        </section>
+
+        <!-- 4. WINDOWS 11 PNP HARDWARE INSPECTOR -->
+        <section class="card hw-card">
+          <h3>🖥️ 4. Windows 11 Connected PnP Hardware</h3>
+          <p class="hw-help">Direct hardware scan from Windows 11 Device Manager (Cameras, Pixy USB, Audio Endpoints, COM Ports):</p>
+          <div id="win11OsBanner" class="os-banner">Scanning Windows 11 Hardware...</div>
+          <div id="win11DeviceList" class="win11-device-list"></div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <!-- =====================================================================
+       TAB 3: GOOGLE GEMINI BACKEND & 121 TWEED BLVD PERSONA SETTINGS
+       ===================================================================== -->
+  <main id="tab-gemini" class="tab-panel" role="tabpanel">
+    <div class="gemini-container">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h2>🧠 Google Gemini Vision Brain &amp; Deerhead Lore</h2>
+            <p class="sub-label">Configure your Google Gemini API key, select the vision model, and customize Buckley's personality at 121 Tweed Blvd, Nyack, NY 10960.</p>
+          </div>
+        </div>
+
+        <div class="settings-grid">
+          <div>
+            <div class="form-group">
+              <label for="aiProviderSelect">AI Backend Provider:</label>
+              <select id="aiProviderSelect" class="hw-select">
+                <option value="gemini" selected>Google Gemini API (Multimodal Vision + Chat — Recommended)</option>
+                <option value="ollama">Local Ollama (Offline Fallback on this PC)</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="geminiApiKeyInput">Google Gemini API Key:</label>
+              <div class="key-input-group">
+                <input type="password" id="geminiApiKeyInput" class="hw-input" placeholder="Paste your Google Gemini API Key (AIzaSy...)" autocomplete="off" />
+                <button id="saveGeminiKeyBtn" class="btn btn-amber">Save &amp; Verify Key</button>
+              </div>
+              <small id="geminiKeyVerifyStatus" class="sub-label">Saved locally in `.env` (gitignored so your key is never uploaded to GitHub).</small>
+            </div>
+
+            <div class="form-group">
+              <label for="geminiModelSelect">Google Gemini Vision Model:</label>
+              <select id="geminiModelSelect" class="hw-select">
+                <option value="gemini-2.5-flash" selected>gemini-2.5-flash (Fast Multimodal Vision — Recommended)</option>
+                <option value="gemini-2.5-pro">gemini-2.5-pro (Deep Reasoning + Vision)</option>
+                <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+                <option value="gemini-flash-latest">gemini-flash-latest</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="autoGreetCooldownRange">
+                Auto-Greeting Cooldown When Seeing a Person: <strong id="cooldownVal">25 seconds</strong>
+              </label>
+              <input type="range" id="autoGreetCooldownRange" min="10" max="90" step="5" value="25" />
+            </div>
+          </div>
+
+          <div>
+            <div class="form-group">
+              <label for="personaTextarea">Deerhead Persona &amp; 121 Tweed Blvd Backstory Prompt:</label>
+              <textarea id="personaTextarea" rows="10" class="hw-textarea"></textarea>
+            </div>
+            <div class="hw-btn-row">
+              <button id="savePersonaBtn" class="btn btn-amber">💾 Save Persona Settings</button>
+              <button id="resetPersonaBtn" class="btn btn-secondary">↩️ Reset to Default 121 Tweed Blvd Lore</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</body>
+</html>
