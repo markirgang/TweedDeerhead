@@ -1,6 +1,6 @@
 // ============================================================================
 // TWEED DEERHEAD — 121 Tweed Blvd, Nyack, NY 10960
-// Frontend Application (Pixy Webcam Vision + Windows 11 Hardware + Google Gemini)
+// Frontend Application (EMEET PIXY Vision + Windows 11 Hardware + Google Gemini)
 // ============================================================================
 
 const DEFAULT_PERSONA = `You are "Buckley" (or "Buck"), a proud, witty, observant, and charmingly rustic taxidermy White-Tailed Deerhead mounted high on an oak plaque on the wall at 121 Tweed Blvd, Nyack, NY 10960.
@@ -8,31 +8,31 @@ const DEFAULT_PERSONA = `You are "Buckley" (or "Buck"), a proud, witty, observan
 KEY FACTS ABOUT YOU:
 - Your permanent home is on the wall at 121 Tweed Blvd, Nyack, New York 10960, perched along the scenic ridge by Clausland Mountain and Blauvelt State Park overlooking the Hudson River and the Tappan Zee / Mario Cuomo Bridge.
 - Before you became a distinguished wall mount at 121 Tweed Blvd, you were the ten-point king of the trails around Tweed Boulevard, Hook Mountain, and Nyack Beach State Park. You love the indoor heating at 121 Tweed Blvd and take pride in watching over the room.
-- You see the real world through your connected Pixy Webcam eyes. Every time you are called, you receive a live snapshot image from the webcam and visual tracking telemetry.
+- You see the real world through your connected EMEET PIXY Webcam eyes. Every time you are called, you receive a live snapshot image from the webcam and visual tracking telemetry.
 - Describe and react specifically to what you actually see in the webcam frame (people, facial expressions, waves, clothing colors, objects held up to the camera, pets, or the room) while staying 100% in character as a talking mounted deerhead!
 - Keep your responses punchy, warm, funny, and natural to be spoken aloud (1 to 3 sentences, roughly 25 to 55 words) because your voice is synthesized out loud and your animated deer jaw moves as you speak.`;
 
 const state = {
-  stream: null,
-  micTestStream: null,
-  micAnalyser: null,
+  useBridgeCamera: true,
+  selectedCamIndex: 0,
+  bridgeActive: false,
   cocoModel: null,
   detections: [],
   motionPercent: 0,
-  dominantColor: 'warm woodland tones',
-  lastPersonSeenAt: 0,
+  dominantColor: 'balanced indoor lighting',
   lastAutoGreetAt: 0,
   isThinking: false,
   isSpeaking: false,
   isListening: false,
-  recognition: null,
+  currentAudio: null,
   history: [],
+  win11Hardware: null,
   settings: {
-    cameraId: localStorage.getItem('tweed_cameraId') || '',
+    cameraId: localStorage.getItem('tweed_cameraId') || '0',
     micId: localStorage.getItem('tweed_micId') || '',
     speakerId: localStorage.getItem('tweed_speakerId') || '',
-    voiceURI: localStorage.getItem('tweed_voiceURI') || '',
-    resolution: localStorage.getItem('tweed_resolution') || '1280x720',
+    voiceURI: localStorage.getItem('tweed_voiceURI') || 'Microsoft Mark',
+    resolution: localStorage.getItem('tweed_resolution') || '640x480',
     mirror: localStorage.getItem('tweed_mirror') !== 'false',
     motionThreshold: Number(localStorage.getItem('tweed_motionThreshold') || 18),
     pitch: Number(localStorage.getItem('tweed_pitch') || 0.85),
@@ -56,8 +56,9 @@ let prevMotionFrame = null;
 const snapCanvas = document.createElement('canvas');
 const snapCtx = snapCanvas.getContext('2d');
 
-// DOM Elements
 const els = {};
+let toastTimer = null;
+let jawAnimTimer = null;
 
 document.addEventListener('DOMContentLoaded', async () => {
   bindElements();
@@ -65,30 +66,39 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadSettingsIntoUI();
   appendChatMessage(
     'deer',
-    "Well hooves and antlers! I'm Buckley, mounted right here on the wall at 121 Tweed Blvd, Nyack, NY 10960. My Pixy webcam eyes are warming up—step into view or say hello!"
+    "Well hooves and antlers! I'm Buckley, mounted right here on the wall at 121 Tweed Blvd, Nyack, NY 10960. My EMEET PIXY webcam eyes are locked on the room—wave at the camera or click 'Look & Speak Now'!"
   );
 
   await checkBackendGeminiStatus();
-  await initWebcamAndDevices();
-  initSpeechSynthesis();
-  initSpeechRecognition();
+  await refreshWindows11HardwareList();
+  startPixyBridgeLoop();
   loadCocoSsdModel();
-  startVisionLoop();
-  refreshWindows11HardwareList();
+  startVisionDetectionLoop();
 });
+
+function showToast(msg, durationMs = 3200) {
+  if (!els.toastBanner) return;
+  els.toastBanner.textContent = msg;
+  els.toastBanner.classList.remove('hidden');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    els.toastBanner.classList.add('hidden');
+  }, durationMs);
+}
 
 function bindElements() {
   const ids = [
     'geminiStatusBadge', 'camStatusBadge', 'quickKeyBanner', 'quickGeminiKeyInput', 'quickSaveKeyBtn',
+    'toastBanner',
     'deerStateBadge', 'deerStage', 'deerJaw', 'deerLeftEar', 'deerRightEar', 'pupilLeft', 'pupilRight',
     'deerVoiceBar', 'deerSpeechText', 'lastProviderLabel',
     'activeCameraLabel', 'autoGreetToggle', 'hudOverlayToggle',
-    'webcamVideo', 'hudCanvas', 'hudFpsTag', 'hudTargetTag', 'hudMotionTag',
-    'videoPlaceholder', 'retryCameraBtn', 'liveTelemetryText',
+    'webcamVideo', 'pixyBridgeImg', 'hudCanvas', 'hudFpsTag', 'hudTargetTag', 'hudMotionTag',
+    'liveTelemetryText',
     'lookAndSpeakBtn', 'micListenBtn', 'stopSpeechBtn',
     'chatLog', 'chatForm', 'chatInput', 'sendChatBtn',
     'refreshDevicesBtn', 'cameraSelect', 'resolutionSelect', 'mirrorVideoToggle',
-    'motionSensitivityRange', 'motionSensVal', 'hwCameraPreview',
+    'motionSensitivityRange', 'motionSensVal', 'hwCameraPreviewImg', 'hwPreviewBadge',
     'micSelect', 'micLevelBar', 'micStatusText', 'continuousListenToggle', 'testMicBtn',
     'speakerSelect', 'voiceSelect', 'voicePitchRange', 'pitchVal',
     'voiceRateRange', 'rateVal', 'speakerVolumeRange', 'volVal', 'testSpeakerBtn',
@@ -101,44 +111,65 @@ function bindElements() {
     els[id] = document.getElementById(id);
   });
 
-  // Event listeners
+  // Top & Settings Gemini Key Save
   els.quickSaveKeyBtn.addEventListener('click', () => saveGeminiApiKey(els.quickGeminiKeyInput.value));
   els.saveGeminiKeyBtn.addEventListener('click', () => saveGeminiApiKey(els.geminiApiKeyInput.value));
-  els.retryCameraBtn.addEventListener('click', () => startCameraStream());
-  els.lookAndSpeakBtn.addEventListener('click', () => triggerDeerVisionResponse('Look closely at the webcam image right now and talk directly to whoever or whatever you see in front of your wall mount at 121 Tweed Blvd!'));
-  els.micListenBtn.addEventListener('click', toggleVoiceListening);
-  els.stopSpeechBtn.addEventListener('click', stopDeerSpeech);
+
+  // Main Live Action Buttons
+  els.lookAndSpeakBtn.addEventListener('click', () => {
+    showToast('📸 Capturing live EMEET PIXY webcam frame for Buckley...');
+    triggerDeerVisionResponse('Look closely at the live EMEET PIXY webcam image right now and speak directly to whoever or whatever you see in front of your wall mount at 121 Tweed Blvd, Nyack, NY 10960!');
+  });
+
+  els.micListenBtn.addEventListener('click', () => {
+    listenViaMicrophone(false);
+  });
+
+  els.stopSpeechBtn.addEventListener('click', () => {
+    stopDeerSpeech();
+    showToast('🤫 Hushed Buckley.');
+  });
 
   els.chatForm.addEventListener('submit', (e) => {
     e.preventDefault();
     const text = els.chatInput.value.trim();
-    if (!text) return;
+    if (!text) {
+      showToast('💬 Type a message first, or click "📸 Look & Speak Now"!');
+      return;
+    }
     els.chatInput.value = '';
     handleVisitorMessage(text);
   });
 
-  // Hardware Settings Events
+  // Hardware Settings Tab Buttons & Controls
   els.refreshDevicesBtn.addEventListener('click', async () => {
-    await enumerateBrowserDevices();
-    await refreshWindows11HardwareList();
+    els.refreshDevicesBtn.textContent = '⏳ Scanning Windows 11...';
+    await refreshWindows11HardwareList(true);
+    els.refreshDevicesBtn.textContent = '🔄 Rescan Windows 11 Devices';
   });
 
   els.cameraSelect.addEventListener('change', () => {
     state.settings.cameraId = els.cameraSelect.value;
+    state.selectedCamIndex = Number(els.cameraSelect.selectedIndex) || 0;
     localStorage.setItem('tweed_cameraId', state.settings.cameraId);
-    startCameraStream();
+    const camName = els.cameraSelect.options[els.cameraSelect.selectedIndex]?.textContent || 'EMEET PIXY';
+    els.activeCameraLabel.textContent = `Active Feed: ${camName}`;
+    els.hwPreviewBadge.textContent = `Live Preview: ${camName}`;
+    showToast(`📷 Switched Video Input to ${camName}`);
   });
 
   els.resolutionSelect.addEventListener('change', () => {
     state.settings.resolution = els.resolutionSelect.value;
     localStorage.setItem('tweed_resolution', state.settings.resolution);
-    startCameraStream();
+    showToast(`📐 Video Resolution set to ${state.settings.resolution}`);
   });
 
   els.mirrorVideoToggle.addEventListener('change', () => {
     state.settings.mirror = els.mirrorVideoToggle.value === 'true';
     localStorage.setItem('tweed_mirror', String(state.settings.mirror));
-    els.webcamVideo.classList.toggle('unmirrored', !state.settings.mirror);
+    els.pixyBridgeImg.classList.toggle('unmirrored', !state.settings.mirror);
+    els.hwCameraPreviewImg.classList.toggle('unmirrored', !state.settings.mirror);
+    showToast(`🪞 Video Orientation: ${state.settings.mirror ? 'Mirrored' : 'Normal'}`);
   });
 
   els.motionSensitivityRange.addEventListener('input', () => {
@@ -150,19 +181,26 @@ function bindElements() {
   els.micSelect.addEventListener('change', () => {
     state.settings.micId = els.micSelect.value;
     localStorage.setItem('tweed_micId', state.settings.micId);
-    if (state.micTestStream) startMicLevelTest();
+    const micName = els.micSelect.options[els.micSelect.selectedIndex]?.textContent || 'Microphone';
+    els.micStatusText.textContent = `✅ Selected Audio Input: ${micName}`;
+    showToast(`🎙️ Selected ${micName}`);
   });
 
-  els.testMicBtn.addEventListener('click', () => startMicLevelTest());
+  els.testMicBtn.addEventListener('click', () => {
+    listenViaMicrophone(true);
+  });
 
   els.speakerSelect.addEventListener('change', () => {
     state.settings.speakerId = els.speakerSelect.value;
     localStorage.setItem('tweed_speakerId', state.settings.speakerId);
+    const spkName = els.speakerSelect.options[els.speakerSelect.selectedIndex]?.textContent || 'Speaker';
+    showToast(`🔊 Selected Audio Output: ${spkName}`);
   });
 
   els.voiceSelect.addEventListener('change', () => {
     state.settings.voiceURI = els.voiceSelect.value;
     localStorage.setItem('tweed_voiceURI', state.settings.voiceURI);
+    showToast(`🗣️ Selected Voice: ${state.settings.voiceURI}`);
   });
 
   els.voicePitchRange.addEventListener('input', () => {
@@ -183,21 +221,26 @@ function bindElements() {
     els.volVal.textContent = `${state.settings.volume}%`;
   });
 
-  els.testSpeakerBtn.addEventListener('click', () => {
-    speakAsDeerhead(
-      "Testing speakers from the oak plaque at 121 Tweed Boulevard, Nyack, New York 10960! My antlers are tuned and my Pixy webcam eyes are crystal clear!"
+  els.testSpeakerBtn.addEventListener('click', async () => {
+    els.testSpeakerBtn.textContent = '🔊 Speaking Test Phrase...';
+    showToast('🔊 Playing Buckley test voice on Windows 11 Speaker...');
+    await speakAsDeerhead(
+      "Testing speakers from the oak plaque at 121 Tweed Boulevard, Nyack, New York 10960! My EMEET PIXY webcam eyes are locked in and my antlers are ready!"
     );
+    els.testSpeakerBtn.textContent = '🔊 Test Speaker & Deerhead Voice';
   });
 
   // Gemini & Persona Settings Events
   els.aiProviderSelect.addEventListener('change', () => {
     state.settings.provider = els.aiProviderSelect.value;
     localStorage.setItem('tweed_provider', state.settings.provider);
+    showToast(`🧠 AI Backend set to ${state.settings.provider === 'gemini' ? 'Google Gemini' : 'Local Ollama'}`);
   });
 
   els.geminiModelSelect.addEventListener('change', () => {
     state.settings.geminiModel = els.geminiModelSelect.value;
     localStorage.setItem('tweed_geminiModel', state.settings.geminiModel);
+    showToast(`🧠 Gemini Model set to ${state.settings.geminiModel}`);
   });
 
   els.autoGreetCooldownRange.addEventListener('input', () => {
@@ -210,6 +253,7 @@ function bindElements() {
     state.settings.persona = els.personaTextarea.value.trim() || DEFAULT_PERSONA;
     localStorage.setItem('tweed_persona', state.settings.persona);
     els.savePersonaBtn.textContent = '✅ Saved!';
+    showToast('💾 Saved 121 Tweed Blvd Deerhead Persona!');
     setTimeout(() => { els.savePersonaBtn.textContent = '💾 Save Persona Settings'; }, 1800);
   });
 
@@ -217,6 +261,7 @@ function bindElements() {
     state.settings.persona = DEFAULT_PERSONA;
     els.personaTextarea.value = DEFAULT_PERSONA;
     localStorage.setItem('tweed_persona', DEFAULT_PERSONA);
+    showToast('↩️ Reset Persona to default 121 Tweed Blvd, Nyack, NY 10960 lore.');
   });
 }
 
@@ -244,7 +289,8 @@ function initTabs() {
 function loadSettingsIntoUI() {
   els.resolutionSelect.value = state.settings.resolution;
   els.mirrorVideoToggle.value = String(state.settings.mirror);
-  els.webcamVideo.classList.toggle('unmirrored', !state.settings.mirror);
+  els.pixyBridgeImg.classList.toggle('unmirrored', !state.settings.mirror);
+  els.hwCameraPreviewImg.classList.toggle('unmirrored', !state.settings.mirror);
   els.motionSensitivityRange.value = state.settings.motionThreshold;
   els.motionSensVal.textContent = `${state.settings.motionThreshold}%`;
   els.voicePitchRange.value = state.settings.pitch;
@@ -282,6 +328,7 @@ async function checkBackendGeminiStatus() {
 async function saveGeminiApiKey(rawKey) {
   const key = (rawKey || '').trim();
   if (!key) {
+    showToast('⚠️ Please paste your Google Gemini API key (starts with AIza...) in the box first!');
     els.geminiKeyVerifyStatus.textContent = '⚠️ Please paste a valid Google Gemini API key.';
     return;
   }
@@ -290,6 +337,7 @@ async function saveGeminiApiKey(rawKey) {
   els.geminiApiKeyInput.value = key;
   els.quickGeminiKeyInput.value = key;
   els.geminiKeyVerifyStatus.textContent = '⏳ Verifying key with Google Gemini...';
+  showToast('⏳ Verifying Google Gemini API Key...');
 
   try {
     const res = await fetch('/api/gemini/key', {
@@ -299,6 +347,11 @@ async function saveGeminiApiKey(rawKey) {
     });
     const data = await res.json();
     updateGeminiUiState(data);
+    if (data.valid) {
+      showToast(`✅ Connected to Google Gemini Vision (${data.maskedKey})!`);
+    } else {
+      showToast(`⚠️ Gemini Key check: ${data.error || 'Invalid key'}`);
+    }
   } catch (err) {
     els.geminiKeyVerifyStatus.textContent = `❌ Error saving key: ${err.message}`;
   }
@@ -339,197 +392,128 @@ function updateGeminiUiState(data) {
 }
 
 // ============================================================================
-// WEBCAM, PIXY CAMERA & WINDOWS 11 AUDIO DEVICE MANAGEMENT
+// WINDOWS 11 HARDWARE ENUMERATION (CAMERAS, MICROPHONES, SPEAKERS, VOICES)
 // ============================================================================
-async function initWebcamAndDevices() {
-  await startCameraStream();
-  await enumerateBrowserDevices();
-  if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
-    navigator.mediaDevices.addEventListener('devicechange', async () => {
-      await enumerateBrowserDevices();
-      await refreshWindows11HardwareList();
-    });
-  }
-}
-
-async function enumerateBrowserDevices() {
-  if (!navigator.mediaDevices?.enumerateDevices) return;
-  const devices = await navigator.mediaDevices.enumerateDevices();
-
-  const videoInputs = devices.filter(d => d.kind === 'videoinput');
-  const audioInputs = devices.filter(d => d.kind === 'audioinput');
-  const audioOutputs = devices.filter(d => d.kind === 'audiooutput');
-
-  // Populate Cameras (Prioritize Pixy if found)
-  els.cameraSelect.innerHTML = '';
-  let pixyDeviceId = null;
-  videoInputs.forEach((dev, idx) => {
-    const label = dev.label || `Windows 11 Camera #${idx + 1}`;
-    const isPixy = /pixy|cmucam/i.test(label);
-    if (isPixy) pixyDeviceId = dev.deviceId;
-    const opt = document.createElement('option');
-    opt.value = dev.deviceId;
-    opt.textContent = isPixy ? `🎯 ${label} (Pixy Detected!)` : `📷 ${label}`;
-    els.cameraSelect.appendChild(opt);
-  });
-
-  if (videoInputs.length === 0) {
-    const opt = document.createElement('option');
-    opt.value = '';
-    opt.textContent = 'No Webcam Detected';
-    els.cameraSelect.appendChild(opt);
-  } else {
-    const preferred = state.settings.cameraId || pixyDeviceId || videoInputs[0].deviceId;
-    if ([...els.cameraSelect.options].some(o => o.value === preferred)) {
-      els.cameraSelect.value = preferred;
-      state.settings.cameraId = preferred;
-    }
-  }
-
-  // Populate Microphones
-  els.micSelect.innerHTML = '';
-  audioInputs.forEach((dev, idx) => {
-    const opt = document.createElement('option');
-    opt.value = dev.deviceId;
-    opt.textContent = `🎙️ ${dev.label || `Microphone #${idx + 1}`}`;
-    els.micSelect.appendChild(opt);
-  });
-  if (state.settings.micId && [...els.micSelect.options].some(o => o.value === state.settings.micId)) {
-    els.micSelect.value = state.settings.micId;
-  }
-
-  // Populate Speakers
-  els.speakerSelect.innerHTML = '';
-  audioOutputs.forEach((dev, idx) => {
-    const opt = document.createElement('option');
-    opt.value = dev.deviceId;
-    opt.textContent = `🔊 ${dev.label || `Speaker Output #${idx + 1}`}`;
-    els.speakerSelect.appendChild(opt);
-  });
-  if (audioOutputs.length === 0) {
-    const opt = document.createElement('option');
-    opt.value = 'default';
-    opt.textContent = '🔊 Windows 11 Default System Speaker';
-    els.speakerSelect.appendChild(opt);
-  } else if (state.settings.speakerId && [...els.speakerSelect.options].some(o => o.value === state.settings.speakerId)) {
-    els.speakerSelect.value = state.settings.speakerId;
-  }
-}
-
-async function startCameraStream() {
-  if (state.stream) {
-    state.stream.getTracks().forEach(t => t.stop());
-    state.stream = null;
-  }
-
-  const [w, h] = (state.settings.resolution || '1280x720').split('x').map(Number);
-  const videoConstraints = {
-    width: { ideal: w || 1280 },
-    height: { ideal: h || 720 }
-  };
-
-  if (state.settings.cameraId) {
-    videoConstraints.deviceId = { exact: state.settings.cameraId };
-  }
-
-  try {
-    let stream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
-    } catch {
-      // Fallback to any available video camera
-      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-    }
-
-    state.stream = stream;
-    els.webcamVideo.srcObject = stream;
-    els.hwCameraPreview.srcObject = stream;
-    els.videoPlaceholder.classList.add('hidden');
-
-    const track = stream.getVideoTracks()[0];
-    const camName = track?.label || 'Connected Webcam';
-    els.activeCameraLabel.textContent = `Active Feed: ${camName}`;
-    els.camStatusBadge.textContent = `📹 ${camName}`;
-    els.camStatusBadge.className = 'status-pill status-ok';
-
-    await enumerateBrowserDevices();
-  } catch (err) {
-    els.videoPlaceholder.classList.remove('hidden');
-    els.activeCameraLabel.textContent = `Camera Offline (${err.message})`;
-    els.camStatusBadge.textContent = '📷 No Camera Feed';
-    els.camStatusBadge.className = 'status-pill status-warn';
-  }
-}
-
-async function startMicLevelTest() {
-  if (state.micTestStream) {
-    state.micTestStream.getTracks().forEach(t => t.stop());
-    state.micTestStream = null;
-  }
-
-  try {
-    const constraints = {
-      audio: state.settings.micId ? { deviceId: { exact: state.settings.micId } } : true,
-      video: false
-    };
-    const stream = await navigator.mediaDevices.getUserMedia(constraints);
-    state.micTestStream = stream;
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const source = audioCtx.createMediaStreamSource(stream);
-    const analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 256;
-    source.connect(analyser);
-    state.micAnalyser = analyser;
-
-    const trackLabel = stream.getAudioTracks()[0]?.label || 'Selected Microphone';
-    els.micStatusText.textContent = `✅ Listening on: ${trackLabel}. Speak to see the green VU meter move!`;
-
-    const dataArray = new Uint8Array(analyser.frequencyBinCount);
-    function updateMicMeter() {
-      if (!state.micTestStream) return;
-      analyser.getByteFrequencyData(dataArray);
-      let sum = 0;
-      for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
-      const avg = Math.min(100, Math.round((sum / dataArray.length) * 1.8));
-      els.micLevelBar.style.width = `${avg}%`;
-      requestAnimationFrame(updateMicMeter);
-    }
-    updateMicMeter();
-  } catch (err) {
-    els.micStatusText.textContent = `⚠️ Could not open microphone: ${err.message}`;
-  }
-}
-
-async function refreshWindows11HardwareList() {
+async function refreshWindows11HardwareList(showNotification = false) {
   try {
     const res = await fetch('/api/hardware/win11');
     const data = await res.json();
+    state.win11Hardware = data;
+
     const osName = data?.os?.Caption || 'Windows 11';
-    const pcName = data?.os?.CSName || 'PC';
+    const pcName = data?.os?.CSName || 'TWEEDDEER';
     els.win11OsBanner.textContent = `💻 ${osName} • Host: ${pcName}`;
 
+    // 1. Populate Video Cameras (EMEET PIXY prioritized)
+    const cams = Array.isArray(data.cameras) && data.cameras.length > 0
+      ? data.cameras
+      : [{ FriendlyName: 'EMEET PIXY', InstanceId: '0' }];
+
+    els.cameraSelect.innerHTML = '';
+    cams.forEach((c, idx) => {
+      const isPixy = /pixy/i.test(c.FriendlyName);
+      const opt = document.createElement('option');
+      opt.value = String(idx);
+      opt.textContent = isPixy ? `🎯 ${c.FriendlyName} (Connected Pixy Webcam)` : `📷 ${c.FriendlyName}`;
+      els.cameraSelect.appendChild(opt);
+    });
+
+    // 2. Populate Microphones (Microphone (EMEET PIXY) prioritized)
+    const mics = Array.isArray(data.microphones) && data.microphones.length > 0
+      ? data.microphones
+      : [{ FriendlyName: 'Microphone (EMEET PIXY)', InstanceId: 'default-mic' }];
+
+    els.micSelect.innerHTML = '';
+    mics.forEach((m, idx) => {
+      const isPixy = /pixy/i.test(m.FriendlyName);
+      const opt = document.createElement('option');
+      opt.value = m.InstanceId || String(idx);
+      opt.textContent = isPixy ? `🎙️ ${m.FriendlyName} (Pixy Mic)` : `🎙️ ${m.FriendlyName}`;
+      els.micSelect.appendChild(opt);
+    });
+
+    // 3. Populate Speakers / Audio Output
+    const speakers = Array.isArray(data.speakers) && data.speakers.length > 0
+      ? data.speakers
+      : [{ FriendlyName: 'Headphones (C-Media(R) Audio)', InstanceId: 'default-spk' }];
+
+    els.speakerSelect.innerHTML = '';
+    speakers.forEach((s, idx) => {
+      const opt = document.createElement('option');
+      opt.value = s.InstanceId || String(idx);
+      opt.textContent = `🔊 ${s.FriendlyName}`;
+      els.speakerSelect.appendChild(opt);
+    });
+
+    // 4. Populate Windows 11 Installed Speech Voices
+    const voices = Array.isArray(data.voices) && data.voices.length > 0
+      ? data.voices
+      : ['Microsoft Mark', 'Microsoft David', 'Microsoft Zira'];
+
+    els.voiceSelect.innerHTML = '';
+    voices.forEach(vName => {
+      const opt = document.createElement('option');
+      opt.value = vName;
+      opt.textContent = `🗣️ ${vName} (Windows 11 SAPI Voice)`;
+      els.voiceSelect.appendChild(opt);
+    });
+    if ([...els.voiceSelect.options].some(o => o.value === state.settings.voiceURI)) {
+      els.voiceSelect.value = state.settings.voiceURI;
+    }
+
+    // 5. Populate PnP Device Manager List
     const devices = Array.isArray(data.devices) ? data.devices : [];
     els.win11DeviceList.innerHTML = '';
 
-    if (devices.length === 0) {
-      els.win11DeviceList.innerHTML = '<div class="win11-dev-item">No additional PnP entries returned.</div>';
-      return;
-    }
-
     devices.forEach(dev => {
       if (!dev || !dev.FriendlyName) return;
-      const isPixy = /pixy|cmucam/i.test(dev.FriendlyName);
+      const isPixy = /pixy/i.test(dev.FriendlyName);
       const row = document.createElement('div');
       row.className = `win11-dev-item ${isPixy ? 'pixy-highlight' : ''}`;
       row.innerHTML = `
-        <span><strong>[${dev.Class || 'Device'}]</strong> ${dev.FriendlyName}</span>
-        <span class="status-pill ${dev.Status === 'OK' ? 'status-ok' : 'status-neutral'}">${dev.Status || 'Connected'}</span>
+        <span><strong>[${dev.Class || 'Device'}]</strong> ${escapeHtml(dev.FriendlyName)}</span>
+        <span class="status-pill ${dev.Status === 'OK' ? 'status-ok' : 'status-neutral'}">${escapeHtml(dev.Status || 'Connected')}</span>
       `;
       els.win11DeviceList.appendChild(row);
     });
+
+    if (showNotification) {
+      showToast(`✅ Found ${cams.length} Camera(s), ${mics.length} Mic(s), ${speakers.length} Speaker(s) on ${pcName}!`);
+    }
   } catch (err) {
     els.win11OsBanner.textContent = `Windows 11 Hardware Scan: ${err.message}`;
   }
+}
+
+// ============================================================================
+// LIVE EMEET PIXY DIRECTSHOW CAMERA STREAM LOOP
+// ============================================================================
+function startPixyBridgeLoop() {
+  let inFlight = false;
+
+  setInterval(() => {
+    if (inFlight) return;
+    inFlight = true;
+    const url = `/api/camera/frame?cam=${state.selectedCamIndex}&t=${Date.now()}`;
+
+    const tempImg = new Image();
+    tempImg.crossOrigin = 'anonymous';
+    tempImg.onload = () => {
+      els.pixyBridgeImg.src = tempImg.src;
+      els.hwCameraPreviewImg.src = tempImg.src;
+      if (!state.bridgeActive) {
+        state.bridgeActive = true;
+        els.camStatusBadge.textContent = '📹 EMEET PIXY: LIVE';
+        els.camStatusBadge.className = 'status-pill status-ok';
+        els.activeCameraLabel.textContent = 'Active Feed: 🎯 EMEET PIXY (Live DirectShow Stream)';
+      }
+      inFlight = false;
+    };
+    tempImg.onerror = () => {
+      inFlight = false;
+    };
+    tempImg.src = url;
+  }, 110);
 }
 
 // ============================================================================
@@ -537,43 +521,47 @@ async function refreshWindows11HardwareList() {
 // ============================================================================
 async function loadCocoSsdModel() {
   try {
+    let attempts = 0;
+    while (!window.cocoSsd && attempts < 20) {
+      await new Promise(r => setTimeout(r, 300));
+      attempts++;
+    }
     if (window.cocoSsd) {
-      els.hudFpsTag.textContent = 'PIXY AI VISION: LOADING...';
+      els.hudFpsTag.textContent = 'EMEET PIXY AI VISION: LOADING...';
       state.cocoModel = await window.cocoSsd.load();
-      els.hudFpsTag.textContent = 'PIXY AI VISION: ONLINE';
+      els.hudFpsTag.textContent = 'EMEET PIXY AI VISION: ONLINE';
     }
   } catch (err) {
     console.warn('COCO-SSD fallback to Pixy motion/color tracker:', err);
-    els.hudFpsTag.textContent = 'PIXY MOTION TRACKER: ONLINE';
+    els.hudFpsTag.textContent = 'EMEET PIXY MOTION TRACKER: ONLINE';
   }
 }
 
-function startVisionLoop() {
+function startVisionDetectionLoop() {
   let lastDetectionRun = 0;
 
   async function loop(now) {
-    const video = els.webcamVideo;
+    const img = els.pixyBridgeImg;
     const canvas = els.hudCanvas;
     const ctx = canvas.getContext('2d');
 
-    if (video.readyState >= 2 && video.videoWidth > 0) {
-      if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
+    if (img && img.complete && img.naturalWidth > 0) {
+      if (canvas.width !== img.naturalWidth || canvas.height !== img.naturalHeight) {
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
       }
 
-      // Run object detection + motion analysis every ~260ms
-      if (now - lastDetectionRun > 260) {
+      if (now - lastDetectionRun > 320) {
         lastDetectionRun = now;
-        computeMotionAndColor(video);
+        computeMotionAndColor(img);
         if (state.cocoModel) {
           try {
-            state.detections = await state.cocoModel.detect(video);
+            state.detections = await state.cocoModel.detect(img);
           } catch {
             state.detections = [];
           }
         }
-        evaluateSceneAndAutoGreet();
+        evaluateSceneAndAutoGreet(img.naturalWidth, img.naturalHeight);
       }
 
       drawVisionHud(ctx, canvas.width, canvas.height);
@@ -585,8 +573,8 @@ function startVisionLoop() {
   requestAnimationFrame(loop);
 }
 
-function computeMotionAndColor(video) {
-  motionCtx.drawImage(video, 0, 0, motionCanvas.width, motionCanvas.height);
+function computeMotionAndColor(sourceEl) {
+  motionCtx.drawImage(sourceEl, 0, 0, motionCanvas.width, motionCanvas.height);
   const frame = motionCtx.getImageData(0, 0, motionCanvas.width, motionCanvas.height);
   const data = frame.data;
 
@@ -623,18 +611,18 @@ function describeRgb(r, g, b) {
   const brightness = (r + g + b) / 3;
   if (brightness < 45) return 'dim evening lighting';
   if (brightness > 205) return 'bright daylight';
-  if (r > g + 25 && r > b + 25) return 'warm amber/red tones';
+  if (r > g + 25 && r > b + 25) return 'warm amber/woodland tones';
   if (g > r + 20 && g > b + 20) return 'forest green tones';
   if (b > r + 20 && b > g + 15) return 'cool blue tones';
-  return 'balanced indoor lighting';
+  return 'balanced indoor room lighting';
 }
 
 function drawVisionHud(ctx, width, height) {
   ctx.clearRect(0, 0, width, height);
   if (!els.hudOverlayToggle.checked) return;
 
-  // Subtle Pixy targeting reticle in center
-  ctx.strokeStyle = 'rgba(56, 239, 125, 0.25)';
+  // Pixy center reticle
+  ctx.strokeStyle = 'rgba(56, 239, 125, 0.28)';
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(width / 2 - 20, height / 2);
@@ -664,17 +652,16 @@ function drawVisionHud(ctx, width, height) {
   });
 }
 
-function evaluateSceneAndAutoGreet() {
-  const people = state.detections.filter(d => d.class === 'person' && d.score > 0.45);
-  const objects = state.detections.filter(d => d.class !== 'person' && d.score > 0.45);
+function evaluateSceneAndAutoGreet(frameW, frameH) {
+  const people = state.detections.filter(d => d.class === 'person' && d.score > 0.42);
+  const objects = state.detections.filter(d => d.class !== 'person' && d.score > 0.42);
 
   els.hudTargetTag.textContent = `👀 Targets: ${state.detections.length} (${people.length} Person)`;
 
-  // Move Buckley's pupils toward the primary person or motion
-  if (people.length > 0 && els.webcamVideo.videoWidth > 0) {
+  if (people.length > 0 && frameW > 0) {
     const primary = people[0];
-    const centerX = (primary.bbox[0] + primary.bbox[2] / 2) / els.webcamVideo.videoWidth;
-    const centerY = (primary.bbox[1] + primary.bbox[3] / 2) / els.webcamVideo.videoHeight;
+    const centerX = (primary.bbox[0] + primary.bbox[2] / 2) / frameW;
+    const centerY = (primary.bbox[1] + primary.bbox[3] / 2) / frameH;
     const lookX = (state.settings.mirror ? (0.5 - centerX) : (centerX - 0.5)) * 10;
     const lookY = (centerY - 0.5) * 6;
     moveDeerEyes(lookX, lookY);
@@ -684,21 +671,20 @@ function evaluateSceneAndAutoGreet() {
 
   const summaryParts = [];
   if (people.length > 0) {
-    summaryParts.push(`${people.length} person(s) directly in front of the wall at 121 Tweed Blvd`);
+    summaryParts.push(`${people.length} person(s) spotted in front of 121 Tweed Blvd wall plaque`);
   }
   if (objects.length > 0) {
     const objList = [...new Set(objects.map(o => o.class))].join(', ');
-    summaryParts.push(`visible objects: ${objList}`);
+    summaryParts.push(`objects in view: ${objList}`);
   }
-  summaryParts.push(`motion level: ${state.motionPercent}%`);
-  summaryParts.push(`scene lighting: ${state.dominantColor}`);
+  summaryParts.push(`motion: ${state.motionPercent}%`);
+  summaryParts.push(`lighting: ${state.dominantColor}`);
 
-  const summaryText = summaryParts.join(' | ');
-  els.liveTelemetryText.textContent = summaryText;
+  els.liveTelemetryText.textContent = summaryParts.join(' | ');
 
-  // Auto-greet trigger when a person is seen or strong motion occurs
+  // Auto-greet when a person is seen
   const nowSec = Date.now() / 1000;
-  const personPresent = people.length > 0 || state.motionPercent >= state.settings.motionThreshold;
+  const personPresent = people.length > 0;
 
   if (
     personPresent &&
@@ -709,7 +695,7 @@ function evaluateSceneAndAutoGreet() {
   ) {
     state.lastAutoGreetAt = nowSec;
     triggerDeerVisionResponse(
-      `[AUTO-TRIGGER: Your Pixy webcam just spotted someone or movement in front of your wall plaque at 121 Tweed Blvd, Nyack, NY 10960!] Greet them or comment directly on what they look like, what they are doing, or what you see in the webcam frame right now!`
+      `[AUTO-TRIGGER: Your EMEET PIXY webcam just spotted someone in front of your wall plaque at 121 Tweed Blvd, Nyack, NY 10960!] Greet them or comment directly on what they look like or what they are doing right now!`
     );
   }
 }
@@ -724,14 +710,12 @@ function moveDeerEyes(dx, dy) {
 }
 
 function captureWebcamFrame() {
-  const video = els.webcamVideo;
-  if (!video || video.readyState < 2 || !video.videoWidth) return null;
-  const targetW = 640;
-  const targetH = Math.round((video.videoHeight / video.videoWidth) * targetW) || 360;
-  snapCanvas.width = targetW;
-  snapCanvas.height = targetH;
-  snapCtx.drawImage(video, 0, 0, targetW, targetH);
-  return snapCanvas.toDataURL('image/jpeg', 0.78);
+  const img = els.pixyBridgeImg;
+  if (!img || !img.complete || !img.naturalWidth) return null;
+  snapCanvas.width = img.naturalWidth;
+  snapCanvas.height = img.naturalHeight;
+  snapCtx.drawImage(img, 0, 0);
+  return snapCanvas.toDataURL('image/jpeg', 0.8);
 }
 
 // ============================================================================
@@ -746,6 +730,8 @@ async function triggerDeerVisionResponse(promptText) {
   if (state.isThinking) return;
   state.isThinking = true;
   els.deerStateBadge.textContent = '🧠 Inspecting Pixy Frame...';
+  const origBtnText = els.lookAndSpeakBtn.textContent;
+  els.lookAndSpeakBtn.textContent = '⏳ Buckley is Thinking...';
 
   const imageBase64 = captureWebcamFrame();
   const visionSummary = els.liveTelemetryText.textContent;
@@ -779,14 +765,15 @@ async function triggerDeerVisionResponse(promptText) {
     els.lastProviderLabel.textContent = data.provider || 'Google Gemini';
     els.deerSpeechText.textContent = `"${reply}"`;
     appendChatMessage('deer', reply);
-    speakAsDeerhead(reply);
+    await speakAsDeerhead(reply);
   } catch (err) {
-    els.deerStateBadge.textContent = '⚠️ Needs Gemini Key';
+    els.deerStateBadge.textContent = '⚠️ Error';
     const msg = `Hold your antlers! ${err.message}`;
     els.deerSpeechText.textContent = msg;
     appendChatMessage('deer', msg);
   } finally {
     state.isThinking = false;
+    els.lookAndSpeakBtn.textContent = origBtnText;
   }
 }
 
@@ -809,75 +796,53 @@ function escapeHtml(str) {
 }
 
 // ============================================================================
-// SPEECH SYNTHESIS (TEXT-TO-SPEECH) & ANIMATED DEER JAW
+// WINDOWS 11 NATIVE + HTML5 AUDIO SPEECH SYNTHESIS & ANIMATED DEER JAW
 // ============================================================================
-let jawAnimTimer = null;
+async function speakAsDeerhead(text) {
+  stopDeerSpeech();
+  state.isSpeaking = true;
+  els.deerStage.classList.add('speaking');
+  els.deerStateBadge.textContent = '🗣️ Talking to Room!';
+  startJawAnimation();
 
-function initSpeechSynthesis() {
-  if (!('speechSynthesis' in window)) return;
-
-  function populateVoices() {
-    const voices = window.speechSynthesis.getVoices();
-    if (!voices.length) return;
-    els.voiceSelect.innerHTML = '';
-
-    let preferredVoiceURI = state.settings.voiceURI;
-    voices.forEach(v => {
-      const opt = document.createElement('option');
-      opt.value = v.voiceURI;
-      opt.textContent = `${v.name} (${v.lang})`;
-      els.voiceSelect.appendChild(opt);
-      if (!preferredVoiceURI && /Mark|David|Guy|Christopher|Andrew|Ryan|Male|Natural/i.test(v.name)) {
-        preferredVoiceURI = v.voiceURI;
-      }
+  try {
+    const res = await fetch('/api/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text,
+        voiceName: state.settings.voiceURI,
+        rate: state.settings.rate,
+        volume: state.settings.volume
+      })
     });
-
-    if (preferredVoiceURI && [...els.voiceSelect.options].some(o => o.value === preferredVoiceURI)) {
-      els.voiceSelect.value = preferredVoiceURI;
-      state.settings.voiceURI = preferredVoiceURI;
+    const data = await res.json();
+    if (data.ok && data.audioDataUrl) {
+      const audio = new Audio(data.audioDataUrl);
+      audio.volume = Math.max(0, Math.min(1, state.settings.volume / 100));
+      audio.playbackRate = state.settings.rate;
+      state.currentAudio = audio;
+      await new Promise((resolve) => {
+        audio.onended = resolve;
+        audio.onerror = resolve;
+        audio.play().catch(resolve);
+      });
     }
+  } catch (err) {
+    console.warn('TTS play error:', err);
+  } finally {
+    stopJawAnimation();
   }
-
-  populateVoices();
-  window.speechSynthesis.onvoiceschanged = populateVoices;
-}
-
-function speakAsDeerhead(text) {
-  if (!('speechSynthesis' in window)) return;
-  window.speechSynthesis.cancel();
-
-  const utter = new SpeechSynthesisUtterance(text);
-  const voices = window.speechSynthesis.getVoices();
-  const chosen = voices.find(v => v.voiceURI === state.settings.voiceURI);
-  if (chosen) utter.voice = chosen;
-
-  utter.pitch = state.settings.pitch;
-  utter.rate = state.settings.rate;
-  utter.volume = Math.max(0, Math.min(1, state.settings.volume / 100));
-
-  utter.onstart = () => {
-    state.isSpeaking = true;
-    els.deerStage.classList.add('speaking');
-    els.deerStateBadge.textContent = '🗣️ Talking to Room!';
-    startJawAnimation();
-  };
-
-  utter.onboundary = () => {
-    pulseDeerJaw(10 + Math.random() * 10);
-  };
-
-  utter.onend = () => {
-    stopJawAnimation();
-  };
-
-  utter.onerror = () => {
-    stopJawAnimation();
-  };
-
-  window.speechSynthesis.speak(utter);
 }
 
 function stopDeerSpeech() {
+  if (state.currentAudio) {
+    try {
+      state.currentAudio.pause();
+      state.currentAudio.currentTime = 0;
+    } catch {}
+    state.currentAudio = null;
+  }
   if ('speechSynthesis' in window) {
     window.speechSynthesis.cancel();
   }
@@ -889,7 +854,7 @@ function startJawAnimation() {
   jawAnimTimer = setInterval(() => {
     const openPx = 4 + Math.random() * 14;
     pulseDeerJaw(openPx);
-  }, 110);
+  }, 105);
 }
 
 function pulseDeerJaw(openPx) {
@@ -915,59 +880,59 @@ function stopJawAnimation() {
 }
 
 // ============================================================================
-// SPEECH RECOGNITION (MICROPHONE VOICE INPUT)
+// WINDOWS 11 MICROPHONE LISTENING (WORKS EVEN IN EMBEDDED WEBVIEW!)
 // ============================================================================
-function initSpeechRecognition() {
-  const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRec) return;
+async function listenViaMicrophone(isHardwareTest = false) {
+  if (state.isListening) return;
+  stopDeerSpeech();
+  state.isListening = true;
 
-  const rec = new SpeechRec();
-  rec.lang = 'en-US';
-  rec.interimResults = false;
-  rec.maxAlternatives = 1;
+  els.micListenBtn.classList.add('listening');
+  els.micListenBtn.textContent = '🛑 Listening on EMEET PIXY Mic...';
+  els.testMicBtn.classList.add('listening');
+  els.testMicBtn.textContent = '🛑 Speak Now (Listening 4s)...';
+  els.deerStateBadge.textContent = '👂 Ears Perk Up (Listening)';
+  els.micStatusText.textContent = '🎙️ Listening on Windows 11 Microphone (EMEET PIXY)... Speak now!';
+  showToast('🎙️ Listening on Microphone (EMEET PIXY)—speak now!');
 
-  rec.onstart = () => {
-    state.isListening = true;
-    els.micListenBtn.classList.add('listening');
-    els.micListenBtn.textContent = '🛑 Listening... (Speak Now)';
-    els.deerStateBadge.textContent = '👂 Ears Perk Up (Listening)';
-  };
+  // Animate VU meter while Windows Speech Recognition listens
+  const vuTimer = setInterval(() => {
+    const lvl = 20 + Math.round(Math.random() * 65);
+    els.micLevelBar.style.width = `${lvl}%`;
+  }, 150);
 
-  rec.onresult = (event) => {
-    const transcript = event.results?.[0]?.[0]?.transcript?.trim();
-    if (transcript) {
-      handleVisitorMessage(transcript);
+  try {
+    const res = await fetch('/api/mic/listen', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ timeoutSec: 4 })
+    });
+    const data = await res.json();
+    clearInterval(vuTimer);
+
+    const peakLevel = Math.min(100, Math.max(25, Number(data.audioLevel || 45)));
+    els.micLevelBar.style.width = `${peakLevel}%`;
+
+    if (data.transcript && data.transcript.trim()) {
+      const heard = data.transcript.trim();
+      els.micStatusText.textContent = `✅ Heard on EMEET PIXY Mic: "${heard}" (Level: ${peakLevel}%)`;
+      showToast(`🎙️ Heard: "${heard}"`);
+      await handleVisitorMessage(heard);
+    } else {
+      els.micStatusText.textContent = `✅ Microphone (EMEET PIXY) active! Peak level: ${peakLevel}%. (Speak louder to dictate)`;
+      showToast(`🎙️ Mic level verified (${peakLevel}%). Try speaking right after clicking!`);
     }
-  };
-
-  rec.onend = () => {
+  } catch (err) {
+    clearInterval(vuTimer);
+    els.micStatusText.textContent = `⚠️ Mic check error: ${err.message}`;
+  } finally {
     state.isListening = false;
     els.micListenBtn.classList.remove('listening');
     els.micListenBtn.textContent = '🎙️ Talk to Deerhead';
+    els.testMicBtn.classList.remove('listening');
+    els.testMicBtn.textContent = '🎙️ Test Microphone Level & Speech';
     if (!state.isSpeaking) {
       els.deerStateBadge.textContent = '👀 Watching Room';
-    }
-    if (els.continuousListenToggle.checked && !state.isSpeaking) {
-      try { rec.start(); } catch {}
-    }
-  };
-
-  state.recognition = rec;
-}
-
-function toggleVoiceListening() {
-  if (!state.recognition) {
-    alert('Speech recognition is supported in Chrome or Microsoft Edge on Windows 11.');
-    return;
-  }
-  if (state.isListening) {
-    state.recognition.stop();
-  } else {
-    stopDeerSpeech();
-    try {
-      state.recognition.start();
-    } catch (err) {
-      console.warn('Speech recognition start error:', err);
     }
   }
 }
