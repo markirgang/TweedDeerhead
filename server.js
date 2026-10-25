@@ -2,13 +2,29 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const readline = require('readline');
 const { exec, spawn } = require('child_process');
 
 const PORT = process.env.PORT || 3121;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const ENV_FILE = path.join(__dirname, '.env');
 
-// Spawn the Python DirectShow Camera Bridge for the EMEET PIXY webcam
+// ============================================================================
+// 1. AUTO-START EMEETLINK TO ENGAGE HARDWARE AI TRACKING ON STARTUP
+// ============================================================================
+function launchEmeetLinkTracking() {
+  const emeetPath = 'C:\\Program Files\\EMEETLINK\\EMEETLINK.exe';
+  if (fs.existsSync(emeetPath)) {
+    exec(`powershell -NoProfile -Command "if (-not (Get-Process EMEETLINK -ErrorAction SilentlyContinue)) { Start-Process '${emeetPath}' -WindowStyle Minimized }"`, (err) => {
+      if (!err) console.log('[EMEET PIXY] EMEETLINK started for hardware auto-tracking');
+    });
+  }
+}
+launchEmeetLinkTracking();
+
+// ============================================================================
+// 2. PERSISTENT PYTHON DIRECTSHOW CAMERA BRIDGE (EMEET PIXY)
+// ============================================================================
 let camBridgeProc = null;
 function startCameraBridge() {
   const scriptPath = path.join(__dirname, 'camera_bridge.py');
@@ -19,18 +35,109 @@ function startCameraBridge() {
   });
   camBridgeProc.stdout.on('data', d => console.log('[CameraBridge]', d.toString().trim()));
   camBridgeProc.on('exit', () => {
-    setTimeout(startCameraBridge, 3000);
+    setTimeout(startCameraBridge, 2000);
   });
 }
 startCameraBridge();
 
-process.on('exit', () => {
-  if (camBridgeProc) {
-    try { camBridgeProc.kill(); } catch {}
+// ============================================================================
+// 3. PERSISTENT PYTHON EMEET PIXY MIC & VU DAEMON (DEVICE 1 @ 44.1 kHz)
+// ============================================================================
+let micDaemonProc = null;
+function startMicDaemon() {
+  const scriptPath = path.join(__dirname, 'mic_daemon.py');
+  if (!fs.existsSync(scriptPath)) return;
+  micDaemonProc = spawn('python', [scriptPath], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true
+  });
+  micDaemonProc.stdout.on('data', d => console.log('[PixyMic]', d.toString().trim()));
+  micDaemonProc.on('exit', () => {
+    setTimeout(startMicDaemon, 2000);
+  });
+}
+startMicDaemon();
+
+// ============================================================================
+// 4. PERSISTENT POWERSHELL SPEECH DAEMON (ZERO STARTUP LAG FOR TTS)
+// ============================================================================
+function createSpeechDaemon(name) {
+  const scriptPath = path.join(__dirname, 'speech_daemon.ps1');
+  let proc = null;
+  let reqCounter = 0;
+  const pending = new Map();
+
+  function start() {
+    proc = spawn(
+      'powershell',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
+      { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true }
+    );
+
+    const rl = readline.createInterface({ input: proc.stdout });
+    rl.on('line', (line) => {
+      try {
+        const msg = JSON.parse(line.trim());
+        if (msg.type === 'ready') {
+          console.log(`[${name}] Persistent Windows 11 Speech Engine Ready`);
+          return;
+        }
+        if (msg.id && pending.has(msg.id)) {
+          const { resolve } = pending.get(msg.id);
+          pending.delete(msg.id);
+          resolve(msg);
+        }
+      } catch {}
+    });
+
+    proc.on('exit', () => {
+      for (const [, { reject }] of pending) {
+        reject(new Error(`${name} restarted`));
+      }
+      pending.clear();
+      setTimeout(start, 1000);
+    });
   }
+
+  start();
+
+  return {
+    send(payload, timeoutMs = 8000) {
+      return new Promise((resolve, reject) => {
+        if (!proc || !proc.stdin.writable) {
+          return reject(new Error(`${name} not ready`));
+        }
+        const id = `${name}_${++reqCounter}_${Date.now()}`;
+        const timer = setTimeout(() => {
+          pending.delete(id);
+          reject(new Error(`${name} timeout`));
+        }, timeoutMs);
+
+        pending.set(id, {
+          resolve: (val) => { clearTimeout(timer); resolve(val); },
+          reject: (err) => { clearTimeout(timer); reject(err); }
+        });
+
+        proc.stdin.write(JSON.stringify({ ...payload, id }) + '\n');
+      });
+    },
+    kill() {
+      if (proc) {
+        try { proc.kill(); } catch {}
+      }
+    }
+  };
+}
+
+const ttsDaemon = createSpeechDaemon('TTS-Daemon');
+
+process.on('exit', () => {
+  if (camBridgeProc) { try { camBridgeProc.kill(); } catch {} }
+  if (micDaemonProc) { try { micDaemonProc.kill(); } catch {} }
+  ttsDaemon.kill();
 });
 
-// Load local .env if present
+// Load local .env
 function loadEnvFile() {
   if (!fs.existsSync(ENV_FILE)) return;
   try {
@@ -59,14 +166,10 @@ function saveGeminiKeyToEnv(apiKey) {
 
 loadEnvFile();
 
-const DEFAULT_DEER_PERSONA = `You are "Buckley" (or "Buck"), a proud, witty, observant, and charmingly rustic taxidermy White-Tailed Deerhead mounted high on an oak plaque on the wall at 121 Tweed Blvd, Nyack, NY 10960.
-
-KEY FACTS ABOUT YOU:
-- Your permanent home is on the wall at 121 Tweed Blvd, Nyack, New York 10960, perched along the scenic ridge by Clausland Mountain and Blauvelt State Park overlooking the Hudson River and the Tappan Zee / Mario Cuomo Bridge.
-- Before you became a distinguished wall mount at 121 Tweed Blvd, you were the ten-point king of the trails around Tweed Boulevard, Hook Mountain, and Nyack Beach State Park. You love the indoor heating at 121 Tweed Blvd and take pride in watching over the room.
-- You see the real world through your connected EMEET PIXY Webcam eyes. Every time you are called, you receive a live snapshot image from the webcam and visual tracking telemetry.
-- Describe and react specifically to what you actually see in the webcam frame (people, facial expressions, waves, clothing colors, objects held up to the camera, pets, or the room) while staying 100% in character as a talking mounted deerhead!
-- Keep your responses punchy, warm, funny, and natural to be spoken aloud (1 to 3 sentences, roughly 25 to 55 words) because your voice is synthesized out loud and your animated deer jaw moves as you speak.`;
+const DEFAULT_DEER_PERSONA = `You are "Buckley", a witty, observant taxidermy trophy Moose/Stag mounted on an oak plaque on the wall at 121 Tweed Blvd, Nyack, NY 10960 (overlooking the Hudson River and Clausland Mountain).
+You see visitors through your EMEET PIXY Webcam eyes.
+React directly to what the visitor says and what you see in the webcam frame.
+IMPORTANT: Keep every reply VERY SHORT and punchy (1 to 2 sentences, max 28 words) so you can speak it immediately without delay!`;
 
 function sendJson(res, status, data) {
   res.writeHead(status, {
@@ -123,7 +226,6 @@ function dedupeByName(items) {
   return out;
 }
 
-// Pre-warmed hardware cache scanned on server startup so clients get instant choices
 let cachedHardware = null;
 
 async function queryWindowsHardware(forceRefresh = false) {
@@ -208,75 +310,25 @@ $voices = @($synth.GetInstalledVoices() | ForEach-Object { $_.VoiceInfo.Name })
   }
 }
 
-// Immediately scan Windows 11 hardware on server startup!
 queryWindowsHardware(true).then(hw => {
   console.log(`[Startup Hardware Scan] Found ${hw.cameras.length} Camera(s), ${hw.microphones.length} Mic(s), ${hw.speakers.length} Speaker(s)`);
 });
 
-// Synthesize speech to WAV & play on Windows 11
-async function synthesizeWindowsSpeech({ text, voiceName, rate = 1.0, volume = 100 }) {
-  const safeText = String(text || '').replace(/"/g, "'").replace(/\r?\n/g, ' ');
-  const safeVoice = String(voiceName || '').replace(/"/g, '');
+// Fast in-memory TTS via persistent daemon
+async function synthesizeWindowsSpeech({ text, voiceName, rate = 1.05, volume = 100 }) {
   const psRate = Math.max(-5, Math.min(5, Math.round((Number(rate) - 1.0) * 6)));
   const psVol = Math.max(0, Math.min(100, Math.round(Number(volume))));
-  const tmpWav = path.join(os.tmpdir(), `tweed_deer_${Date.now()}.wav`);
-
-  const psScript = `
-Add-Type -AssemblyName System.Speech
-$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
-$synth.Volume = ${psVol}
-$synth.Rate = ${psRate}
-$targetVoice = "${safeVoice}"
-if ($targetVoice) {
-  $match = $synth.GetInstalledVoices() | Where-Object { $targetVoice -like "*$($_.VoiceInfo.Name)*" -or $_.VoiceInfo.Name -like "*$targetVoice*" } | Select-Object -First 1
-  if ($match) { $synth.SelectVoice($match.VoiceInfo.Name) }
-}
-$wavPath = "${tmpWav.replace(/\\/g, '\\\\')}"
-$synth.SetOutputToWaveFile($wavPath)
-$synth.Speak("${safeText}")
-$synth.SetOutputToNull()
-$synth.Dispose()
-`;
-
-  await runPowerShellEncoded(psScript, 15000);
-  if (fs.existsSync(tmpWav)) {
-    const wavBuf = fs.readFileSync(tmpWav);
-    try { fs.unlinkSync(tmpWav); } catch {}
-    return `data:audio/wav;base64,${wavBuf.toString('base64')}`;
+  const res = await ttsDaemon.send({
+    action: 'tts',
+    text: String(text || ''),
+    voiceName: String(voiceName || ''),
+    rate: psRate,
+    volume: psVol
+  }, 8000);
+  if (res && res.ok && res.audioDataUrl) {
+    return res.audioDataUrl;
   }
-  throw new Error('Could not synthesize WAV audio');
-}
-
-// Listen via Windows 11 Native Speech Recognition Engine with peak AudioLevel tracking
-async function listenWindowsMicrophone(timeoutSec = 5) {
-  const psScript = `
-$ErrorActionPreference = 'Stop'
-try {
-  Add-Type -AssemblyName System.Speech
-  $rec = New-Object System.Speech.Recognition.SpeechRecognitionEngine
-  $rec.SetInputToDefaultAudioDevice()
-  $grammar = New-Object System.Speech.Recognition.DictationGrammar
-  $rec.LoadGrammar($grammar)
-  $script:maxLevel = 0
-  $rec.add_AudioLevelUpdated({
-    param($s, $e)
-    if ($e.AudioLevel -gt $script:maxLevel) {
-      $script:maxLevel = $e.AudioLevel
-    }
-  })
-  $result = $rec.Recognize([TimeSpan]::FromSeconds(${Number(timeoutSec) || 5}))
-  $rec.Dispose()
-  if ($result -and $result.Text) {
-    @{ ok = $true; transcript = $result.Text; audioLevel = $script:maxLevel } | ConvertTo-Json -Compress
-  } else {
-    @{ ok = $true; transcript = ""; audioLevel = $script:maxLevel; note = "No speech words recognized during listening window" } | ConvertTo-Json -Compress
-  }
-} catch {
-  @{ ok = $false; error = $_.Exception.Message } | ConvertTo-Json -Compress
-}
-`;
-  const stdout = await runPowerShellEncoded(psScript, (timeoutSec + 5) * 1000);
-  return JSON.parse(stdout);
+  throw new Error(res?.error || 'TTS failed');
 }
 
 // Verify Google Gemini API Key and fetch available Gemini Vision models
@@ -330,7 +382,7 @@ async function checkGeminiStatus(apiKey) {
   }
 }
 
-// Call Google Gemini Multimodal API (Vision + Text)
+// Call Google Gemini Multimodal API with zero thinking delay (thinkingBudget: 0)
 async function callGemini({ apiKey, model = 'gemini-2.5-flash', systemPrompt, userMessage, imageBase64, visionSummary, history = [] }) {
   const cleanKey = (apiKey || process.env.GEMINI_API_KEY || '').trim();
   if (!cleanKey) {
@@ -338,7 +390,7 @@ async function callGemini({ apiKey, model = 'gemini-2.5-flash', systemPrompt, us
   }
 
   const contents = [];
-  for (const h of history.slice(-8)) {
+  for (const h of history.slice(-4)) {
     contents.push({
       role: h.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: h.content }]
@@ -359,12 +411,20 @@ async function callGemini({ apiKey, model = 'gemini-2.5-flash', systemPrompt, us
   }
 
   const combinedText = [
-    visionSummary ? `[LIVE EMEET PIXY WEBCAM TELEMETRY AT 121 TWEED BLVD, NYACK, NY 10960]: ${visionSummary}` : '',
-    userMessage || 'Look at the live webcam image right now and talk to whoever or whatever you see in front of your wall mount at 121 Tweed Blvd!'
-  ].filter(Boolean).join('\n\n');
+    visionSummary ? `[PIXY CAM]: ${visionSummary}` : '',
+    userMessage || 'Look at the webcam and say something short and witty to whoever you see!'
+  ].filter(Boolean).join('\n');
 
   userParts.push({ text: combinedText });
   contents.push({ role: 'user', parts: userParts });
+
+  const generationConfig = {
+    temperature: 0.75,
+    maxOutputTokens: 60
+  };
+  if (/2\.5/i.test(model)) {
+    generationConfig.thinkingConfig = { thinkingBudget: 0 };
+  }
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(cleanKey)}`;
   const res = await fetch(url, {
@@ -373,16 +433,13 @@ async function callGemini({ apiKey, model = 'gemini-2.5-flash', systemPrompt, us
     body: JSON.stringify({
       system_instruction: { parts: [{ text: systemPrompt }] },
       contents,
-      generationConfig: {
-        temperature: 0.85,
-        maxOutputTokens: 220
-      }
+      generationConfig
     })
   });
 
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`Gemini API (${model}) error ${res.status}: ${errText.slice(0, 220)}`);
+    throw new Error(`Gemini API (${model}) error ${res.status}: ${errText.slice(0, 180)}`);
   }
 
   const data = await res.json();
@@ -391,43 +448,62 @@ async function callGemini({ apiKey, model = 'gemini-2.5-flash', systemPrompt, us
   return reply;
 }
 
-// Call Local Ollama
+// Fast Local Ollama fallback
 async function callOllama({ ollamaUrl = 'http://127.0.0.1:11434', model = 'llama3.2:latest', systemPrompt, userMessage, visionSummary, history = [] }) {
   const messages = [{ role: 'system', content: systemPrompt }];
-  for (const h of history.slice(-6)) {
+  for (const h of history.slice(-4)) {
     messages.push({ role: h.role === 'assistant' ? 'assistant' : 'user', content: h.content });
   }
 
   const combinedText = [
-    visionSummary ? `[LIVE EMEET PIXY WEBCAM TELEMETRY AT 121 TWEED BLVD, NYACK, NY 10960]: ${visionSummary}` : '',
-    userMessage || 'React in character as Buckley the mounted deerhead at 121 Tweed Blvd, Nyack, NY 10960 to what your Pixy webcam sees right now!'
-  ].filter(Boolean).join('\n\n');
+    visionSummary ? `[PIXY CAM]: ${visionSummary}` : '',
+    userMessage || 'Give a short 1-sentence greeting from the wall at 121 Tweed Blvd!'
+  ].filter(Boolean).join('\n');
 
   messages.push({ role: 'user', content: combinedText });
 
-  const res = await fetch(`${ollamaUrl.replace(/\/$/, '')}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model,
-      messages,
-      stream: false,
-      options: {
-        temperature: 0.85,
-        num_predict: 140
-      }
-    })
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 4200);
 
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Ollama error (${res.status}): ${errText.slice(0, 200)}`);
+  try {
+    const res = await fetch(`${ollamaUrl.replace(/\/$/, '')}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model,
+        messages,
+        stream: false,
+        keep_alive: '60m',
+        options: {
+          temperature: 0.8,
+          num_predict: 50,
+          num_ctx: 1024
+        }
+      })
+    });
+    clearTimeout(timer);
+    if (!res.ok) throw new Error(`Ollama HTTP ${res.status}`);
+    const data = await res.json();
+    return data?.message?.content?.trim() || "Loud and clear from 121 Tweed Blvd!";
+  } catch (err) {
+    clearTimeout(timer);
+    throw err;
   }
+}
 
-  const data = await res.json();
-  const reply = data?.message?.content?.trim();
-  if (!reply) throw new Error('Empty response from Ollama');
-  return reply;
+function instantBuckleyFallback(userMessage, visionSummary) {
+  const lower = (userMessage || '').toLowerCase();
+  if (lower.includes('where') || lower.includes('tweed') || lower.includes('nyack')) {
+    return "I'm mounted right here on the oak plaque at 121 Tweed Blvd in Nyack, NY 10960! Best view in Rockland County!";
+  }
+  if (lower.includes('who') || lower.includes('name')) {
+    return "Name's Buckley, the trophy buck of 121 Tweed Boulevard! My EMEET PIXY eyes never miss a thing!";
+  }
+  if (/person/i.test(visionSummary || '')) {
+    return "Well hooves and antlers! I see you loud and clear on my Pixy cam here at 121 Tweed Blvd! What's shakin', neighbor?";
+  }
+  return "Loud and clear from the wall at 121 Tweed Blvd in Nyack! Tell me what's on your mind!";
 }
 
 const MIME_TYPES = {
@@ -445,9 +521,9 @@ const server = http.createServer(async (req, res) => {
   const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const pathname = parsedUrl.pathname;
 
-  // Proxy live EMEET PIXY camera frame from Python DirectShow daemon
+  // Proxy live EMEET PIXY camera frame from Python DirectShow bridge
   if (pathname === '/api/camera/frame' && req.method === 'GET') {
-    const camIdx = parsedUrl.searchParams.get('cam') || '0';
+    const camIdx = parsedUrl.searchParams.get('cam') || '1';
     http.get(`http://127.0.0.1:3122/frame?cam=${encodeURIComponent(camIdx)}`, (camRes) => {
       if (camRes.statusCode !== 200) {
         res.writeHead(503);
@@ -465,6 +541,34 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Proxy real-time RMS microphone VU level from Python sounddevice daemon
+  if (pathname === '/api/mic/level' && req.method === 'GET') {
+    http.get('http://127.0.0.1:3123/level', (micRes) => {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      micRes.pipe(res);
+    }).on('error', () => {
+      sendJson(res, 200, { level: 0 });
+    });
+    return;
+  }
+
+  // Proxy microphone listening & transcription to Python daemon (Direct Device 1 @ 44.1 kHz)
+  if (pathname === '/api/mic/listen' && req.method === 'POST') {
+    const micReq = http.request(
+      'http://127.0.0.1:3123/listen',
+      { method: 'POST', headers: { 'Content-Type': 'application/json' } },
+      (micRes) => {
+        res.writeHead(micRes.statusCode, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        micRes.pipe(res);
+      }
+    );
+    micReq.on('error', (err) => {
+      sendJson(res, 500, { ok: false, error: err.message });
+    });
+    req.pipe(micReq);
+    return;
+  }
+
   if (pathname === '/api/hardware/win11' && req.method === 'GET') {
     const force = parsedUrl.searchParams.get('refresh') === '1';
     const hw = await queryWindowsHardware(force);
@@ -476,16 +580,6 @@ const server = http.createServer(async (req, res) => {
       const body = await parseBody(req);
       const audioDataUrl = await synthesizeWindowsSpeech(body);
       return sendJson(res, 200, { ok: true, audioDataUrl });
-    } catch (err) {
-      return sendJson(res, 500, { ok: false, error: err.message });
-    }
-  }
-
-  if (pathname === '/api/mic/listen' && req.method === 'POST') {
-    try {
-      const body = await parseBody(req);
-      const result = await listenWindowsMicrophone(body.timeoutSec || 5);
-      return sendJson(res, 200, result);
     } catch (err) {
       return sendJson(res, 500, { ok: false, error: err.message });
     }
@@ -557,22 +651,39 @@ const server = http.createServer(async (req, res) => {
             visionSummary,
             history
           });
-          usedProvider = `Local Ollama (${model || 'llama3.2:latest'})`;
+          usedProvider = `Local AI (${model || 'llama3.2:latest'})`;
         }
-      } catch (err) {
-        reply = await callOllama({
-          ollamaUrl,
-          model: 'llama3.2:latest',
-          systemPrompt,
-          userMessage,
-          visionSummary,
-          history
-        });
-        usedProvider = 'Local AI (Paste Gemini Key for Google Gemini Vision)';
+      } catch {
+        try {
+          reply = await callOllama({
+            ollamaUrl,
+            model: 'llama3.2:latest',
+            systemPrompt,
+            userMessage,
+            visionSummary,
+            history
+          });
+          usedProvider = 'Local AI (Fast Mode)';
+        } catch {
+          reply = instantBuckleyFallback(userMessage, visionSummary);
+          usedProvider = 'Buckley Instant Reflex';
+        }
       }
+
+      // Pre-synthesize WAV audio in the same round-trip for minimum conversational delay!
+      let audioDataUrl = null;
+      try {
+        audioDataUrl = await synthesizeWindowsSpeech({
+          text: reply,
+          voiceName: body.voiceName || 'Microsoft David Desktop',
+          rate: body.rate || 1.05,
+          volume: body.volume ?? 100
+        });
+      } catch {}
 
       return sendJson(res, 200, {
         reply,
+        audioDataUrl,
         provider: usedProvider,
         timestamp: new Date().toISOString()
       });
@@ -581,7 +692,6 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // Serve static files from public/
   let safePath = path.normalize(pathname === '/' ? '/index.html' : pathname).replace(/^(\.\.[/\\])+/, '');
   let filePath = path.join(PUBLIC_DIR, safePath);
 
@@ -602,9 +712,11 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`\n🦌 ============================================================`);
-  console.log(`🦌 TWEED DEERHEAD APP RUNNING!`);
+  console.log(`🦌 TWEED DEERHEAD & MOOSE APP RUNNING!`);
   console.log(`📍 Wall Location: 121 Tweed Blvd, Nyack, NY 10960`);
-  console.log(`📹 EMEET PIXY DirectShow Bridge: Enabled`);
+  console.log(`📹 EMEET PIXY DirectShow Bridge: Port 3122`);
+  console.log(`🎙️ EMEET PIXY Mic & Real-time VU Daemon: Port 3123`);
+  console.log(`👄 Solenoid Jaw: Binary ON/OFF Action`);
   console.log(`🌐 Open in Browser: http://localhost:${PORT}`);
   console.log(`🦌 ============================================================\n`);
 });
