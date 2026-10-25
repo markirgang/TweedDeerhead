@@ -1,10 +1,10 @@
 // ============================================================================
 // TWEED DEERHEAD & MOOSE — 121 Tweed Blvd, Nyack, NY 10960
-// Frontend App: Dual Viewport (Video + 3D Talking Moose), Real-time Hardware VU Meter,
-// Continuous Conversation Toggle, Fast Reflex AI & Binary ON/OFF Solenoid Jaw
+// Continuous Session-Long Microphone Listening, Real-time VU Meter Under Button,
+// Gemini 3.8 Flash Vision, 3D Talking Moose & Binary ON/OFF Solenoid Jaw
 // ============================================================================
 
-const DEFAULT_PERSONA = `You are "Buckley", a witty, observant taxidermy trophy Moose/Stag mounted on an oak plaque at 121 Tweed Blvd, Nyack, NY 10960 (overlooking the Hudson River and Clausland Mountain).
+const DEFAULT_PERSONA = `You are "Buckley", a witty, observant taxidermy trophy Moose/Stag mounted on an oak plaque on the wall at 121 Tweed Blvd, Nyack, NY 10960 (overlooking the Hudson River and Clausland Mountain).
 You see visitors through your EMEET PIXY Webcam eyes.
 React directly to what the visitor says and what you see in the webcam frame.
 IMPORTANT: Keep every reply VERY SHORT and punchy (1 to 2 sentences, max 28 words) so you can speak it immediately without delay!`;
@@ -19,7 +19,7 @@ const VOICE_PRESETS = {
 };
 
 const state = {
-  selectedCamIndex: 1, // Physical EMEET PIXY
+  selectedCamIndex: 1, // Verified EMEET PIXY device index
   bridgeActive: false,
   cocoModel: null,
   detections: [],
@@ -29,7 +29,8 @@ const state = {
   isThinking: false,
   isSpeaking: false,
   isListening: false,
-  continuousConversationActive: false,
+  // CONTINUOUS LISTENING ACTIVE FOR THE ENTIRE SESSION:
+  continuousConversationActive: true,
   currentAudio: null,
   history: [],
   win11Hardware: null,
@@ -46,7 +47,7 @@ const state = {
     rate: Number(localStorage.getItem('tweed_rate') || 1.05),
     volume: Number(localStorage.getItem('tweed_volume') || 100),
     provider: localStorage.getItem('tweed_provider') || 'gemini',
-    geminiModel: localStorage.getItem('tweed_geminiModel') || 'gemini-2.5-flash',
+    geminiModel: localStorage.getItem('tweed_geminiModel') || 'gemini-3.8-flash',
     geminiApiKey: localStorage.getItem('tweed_geminiApiKey') || '',
     autoGreetCooldown: Number(localStorage.getItem('tweed_autoGreetCooldown') || 25),
     persona: localStorage.getItem('tweed_persona') || DEFAULT_PERSONA
@@ -79,10 +80,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   appendChatMessage(
     'deer',
-    "Well hooves and antlers! I'm Buckley, mounted on the wall at 121 Tweed Blvd, Nyack, NY 10960. My EMEET PIXY webcam and physical mic are live! Click 'Talk to Deerhead' to begin!"
+    "Well hooves and antlers! I'm Buckley, mounted on the wall at 121 Tweed Blvd, Nyack, NY 10960. Continuous listening is engaged—speak anytime into your EMEET PIXY mic and I'll answer immediately!"
   );
 
-  // 2. Scan hardware on startup
+  // 2. Scan hardware on startup & verify Gemini
   await Promise.all([
     refreshWindows11HardwareList(false),
     checkBackendGeminiStatus()
@@ -93,8 +94,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadCocoSsdModel();
   startVisionDetectionLoop();
 
-  // 4. Start REAL-TIME hardware VU meter polling directly from EMEET PIXY mic!
+  // 4. Start REAL-TIME hardware VU meter polling from Python EMEET PIXY daemon
   startRealtimeHardwareVuPolling();
+
+  // 5. START CONTINUOUS SESSION-LONG LISTENING LOOP (Never shuts off automatically!)
+  updateTalkButtonUI();
+  runContinuousListeningLoop();
 });
 
 function showToast(msg, durationMs = 3400) {
@@ -117,10 +122,10 @@ function bindElements() {
     'webcamVideo', 'pixyBridgeImg', 'hudCanvas', 'hudFpsTag', 'hudTargetTag', 'hudMotionTag',
     'reset3dViewBtn',
     'quickCameraSelect', 'quickMicSelect', 'quickVoicePresetSelect',
-    'vuStatusDot', 'vuLevelLabel', 'micStateBadge', 'vuLedLadder',
-    'mainTestMicBtn', 'actionBarTestMicBtn',
+    'conversationToggleBtn', 'talkBtnHeading', 'talkBtnSubtext',
+    'vuStatusDot', 'vuLevelLabel', 'mainTestMicBtn', 'micStateBadge', 'vuLedLadder',
     'liveTelemetryText',
-    'conversationToggleBtn', 'lookAndSpeakBtn', 'stopSpeechBtn',
+    'lookAndSpeakBtn', 'stopSpeechBtn',
     'chatLog', 'chatForm', 'chatInput', 'sendChatBtn',
     'refreshDevicesBtn', 'cameraSelect', 'resolutionSelect', 'mirrorVideoToggle',
     'motionSensitivityRange', 'motionSensVal', 'hwCameraPreviewImg', 'hwPreviewBadge',
@@ -153,12 +158,12 @@ function bindElements() {
     showToast('🎯 EMEET PIXY tracking active! Hold up your open palm ✋ to the camera for 2s to toggle physical motorized tracking.');
   });
 
-  // CONTINUOUS CONVERSATION TOGGLE BUTTON
+  // CONTINUOUS TALK BUTTON TOGGLE (STAYS ON FOR ENTIRE SESSION!)
   els.conversationToggleBtn?.addEventListener('click', toggleContinuousConversation);
 
-  // TEST MIC BUTTONS (Header of VU Meter + Action Bar)
+  // Dedicated Test Mic Buttons
   els.mainTestMicBtn?.addEventListener('click', () => testMicrophoneLevel());
-  els.actionBarTestMicBtn?.addEventListener('click', () => testMicrophoneLevel());
+  els.testMicBtn?.addEventListener('click', () => testMicrophoneLevel());
 
   // Look & Speak Now
   els.lookAndSpeakBtn?.addEventListener('click', () => {
@@ -167,9 +172,6 @@ function bindElements() {
   });
 
   els.stopSpeechBtn?.addEventListener('click', () => {
-    if (state.continuousConversationActive) {
-      toggleContinuousConversation();
-    }
     stopDeerSpeech();
     showToast('🤫 Hushed Buckley.');
   });
@@ -179,7 +181,7 @@ function bindElements() {
     e.preventDefault();
     const text = els.chatInput.value.trim();
     if (!text) {
-      showToast('💬 Type a message first, or toggle Talk to Deerhead!');
+      showToast('💬 Type a message first, or simply speak into your mic!');
       return;
     }
     els.chatInput.value = '';
@@ -258,10 +260,6 @@ function bindElements() {
     els.motionSensVal.textContent = `${state.settings.motionThreshold}%`;
   });
 
-  els.testMicBtn?.addEventListener('click', () => {
-    testMicrophoneLevel();
-  });
-
   els.voicePitchRange?.addEventListener('input', () => {
     state.settings.pitch = Number(els.voicePitchRange.value);
     localStorage.setItem('tweed_pitch', String(state.settings.pitch));
@@ -286,7 +284,7 @@ function bindElements() {
     await speakAsDeerhead(
       "Testing the binary solenoid jaw and audio from 121 Tweed Boulevard, Nyack, NY 10960! Solenoid clicks open and shut with zero lag!"
     );
-    els.testSpeakerBtn.textContent = '🔊 Test Selected Voice & 3D Jaw';
+    els.testSpeakerBtn.textContent = '🔊 Test Selected Voice & Solenoid Jaw';
   });
 
   // Gemini & Persona
@@ -381,8 +379,125 @@ function loadSettingsIntoUI() {
 }
 
 // ============================================================================
+// CONTINUOUS TALK BUTTON TOGGLE (NEVER SHUTS OFF AUTOMATICALLY!)
+// "Keep the mic listening continuously for the entire session. Do not shut off
+// the button automatically. Also, put a VU meter under the button"
+// ============================================================================
+function updateTalkButtonUI() {
+  const btn = els.conversationToggleBtn;
+  const icon = btn?.querySelector('.btn-talk-icon');
+  if (!btn) return;
+
+  if (state.continuousConversationActive) {
+    btn.classList.add('active');
+    btn.classList.remove('paused');
+    if (icon) icon.textContent = '🟢';
+    if (els.talkBtnHeading) els.talkBtnHeading.textContent = 'TALK TO DEERHEAD: LISTENING CONTINUOUSLY';
+    if (els.talkBtnSubtext) els.talkBtnSubtext.textContent = 'Active for entire session. Speak anytime—Buckley responds immediately. (Click to pause)';
+    if (els.micStateBadge) {
+      els.micStateBadge.textContent = 'Listening Continuously';
+      els.micStateBadge.className = 'vu-badge listening';
+    }
+    if (els.vuStatusDot) els.vuStatusDot.classList.add('active');
+  } else {
+    btn.classList.remove('active');
+    btn.classList.add('paused');
+    if (icon) icon.textContent = '⚪';
+    if (els.talkBtnHeading) els.talkBtnHeading.textContent = 'TALK TO DEERHEAD: PAUSED';
+    if (els.talkBtnSubtext) els.talkBtnSubtext.textContent = 'Click here to resume continuous listening for the entire session.';
+    if (els.micStateBadge) {
+      els.micStateBadge.textContent = 'Paused';
+      els.micStateBadge.className = 'vu-badge';
+    }
+    if (els.vuStatusDot) els.vuStatusDot.classList.remove('active');
+  }
+}
+
+function toggleContinuousConversation() {
+  state.continuousConversationActive = !state.continuousConversationActive;
+  updateTalkButtonUI();
+
+  if (state.continuousConversationActive) {
+    showToast('🟢 Continuous Listening ACTIVE! Speak anytime—Buckley responds immediately!');
+    runContinuousListeningLoop();
+  } else {
+    stopDeerSpeech();
+    showToast('⚪ Continuous Listening PAUSED. Click button to resume.');
+    if (els.deerStateBadge) els.deerStateBadge.textContent = '👀 Watching Room';
+  }
+}
+
+// THE CONTINUOUS LISTENING LOOP: Cycles endlessly without shutting off the button!
+async function runContinuousListeningLoop() {
+  while (state.continuousConversationActive) {
+    // If Buckley is currently speaking out loud, wait until speech finishes
+    if (state.isSpeaking || state.isThinking) {
+      await new Promise(r => setTimeout(r, 150));
+      continue;
+    }
+
+    state.isListening = true;
+    if (els.deerStateBadge) els.deerStateBadge.textContent = '👂 Ears Perked (Listening...)';
+
+    try {
+      // Call mic daemon (detects speech end and returns ~0.4s after user stops talking)
+      const res = await fetch('/api/mic/listen', { method: 'POST' });
+      const data = await res.json();
+
+      if (!state.continuousConversationActive) break;
+
+      if (data.transcript && data.transcript.trim()) {
+        const heard = data.transcript.trim();
+        showToast(`🎙️ You: "${heard}"`);
+        appendChatMessage('visitor', heard);
+
+        // Generate instant answer with Gemini 3.8 Flash & play with binary solenoid jaw
+        await triggerDeerVisionResponse(heard);
+      }
+    } catch (err) {
+      console.warn('Continuous mic loop notice:', err);
+      await new Promise(r => setTimeout(r, 500));
+    } finally {
+      state.isListening = false;
+    }
+
+    // Brief 100ms pause between chunks before immediately listening again!
+    await new Promise(r => setTimeout(r, 100));
+  }
+}
+
+// Fast one-off mic test
+async function testMicrophoneLevel() {
+  const btns = [els.mainTestMicBtn, els.testMicBtn].filter(Boolean);
+  btns.forEach(b => {
+    b.textContent = '🛑 Speak Now...';
+  });
+  showToast('🎙️ Speak now! Testing microphone input...');
+
+  try {
+    const res = await fetch('/api/mic/listen', { method: 'POST' });
+    const data = await res.json();
+
+    if (data.transcript && data.transcript.trim()) {
+      const heard = data.transcript.trim();
+      if (els.micStatusText) els.micStatusText.textContent = `✅ Heard on EMEET PIXY Mic: "${heard}"`;
+      showToast(`🎙️ EMEET PIXY Mic Heard: "${heard}"`);
+      appendChatMessage('visitor', `[Mic Test]: ${heard}`);
+    } else {
+      if (els.micStatusText) els.micStatusText.textContent = `✅ EMEET PIXY Microphone active! Sound detected.`;
+      showToast(`✅ EMEET PIXY Mic is working! Check VU meter as you speak.`);
+    }
+  } catch (err) {
+    if (els.micStatusText) els.micStatusText.textContent = `⚠️ Mic error: ${err.message}`;
+  } finally {
+    if (els.mainTestMicBtn) els.mainTestMicBtn.textContent = '🎙️ Test Mic';
+    if (els.testMicBtn) els.testMicBtn.textContent = '🎙️ Test Microphone Input Level';
+  }
+}
+
+// ============================================================================
 // REAL-TIME HARDWARE VU METER POLLING FROM PYTHON SOUNDDEVICE DAEMON
-// Directly streams actual physical sound from Microphone (EMEET PIXY)!
+// Continuously streams actual physical sound from Microphone (EMEET PIXY)!
 // ============================================================================
 function updateVuMeterDisplay(percent) {
   const p = Math.max(0, Math.min(100, Math.round(percent)));
@@ -390,9 +505,6 @@ function updateVuMeterDisplay(percent) {
 
   if (els.vuLevelLabel) {
     els.vuLevelLabel.textContent = `${p}% (${dB} dB)`;
-  }
-  if (els.vuStatusDot) {
-    els.vuStatusDot.classList.toggle('active', p > 6);
   }
   if (els.micLevelBar) {
     els.micLevelBar.style.width = `${p}%`;
@@ -416,132 +528,28 @@ function startRealtimeHardwareVuPolling() {
         updateVuMeterDisplay(rawLevel);
 
         if (els.micStateBadge) {
-          if (state.isListening) {
-            els.micStateBadge.textContent = 'Listening (Speak Now)';
-            els.micStateBadge.className = 'vu-badge listening';
+          if (!state.continuousConversationActive) {
+            els.micStateBadge.textContent = 'Paused';
+            els.micStateBadge.className = 'vu-badge';
           } else if (rawLevel > 8) {
-            els.micStateBadge.textContent = 'Audio Detected';
+            els.micStateBadge.textContent = 'Speech Detected';
             els.micStateBadge.className = 'vu-badge listening';
           } else {
-            els.micStateBadge.textContent = 'Standby (Mic Ready)';
-            els.micStateBadge.className = 'vu-badge';
+            els.micStateBadge.textContent = 'Listening Continuously';
+            els.micStateBadge.className = 'vu-badge listening';
           }
         }
       }
     } catch {}
-  }, 75);
+  }, 70);
 }
 
 // ============================================================================
-// CONTINUOUS CONVERSATION TOGGLE LOOP
-// "Talk to deerhead button should always stay on once pressed unless I press
-// it again and then it should toggle off and stop listening. Once I stop
-// talking it should respond immediately."
-// ============================================================================
-function toggleContinuousConversation() {
-  state.continuousConversationActive = !state.continuousConversationActive;
-
-  if (state.continuousConversationActive) {
-    els.conversationToggleBtn.classList.add('active');
-    els.conversationToggleBtn.textContent = '🛑 Stop Conversation (Listening Active)';
-    showToast('🎙️ Continuous Loop Active! Speak into your EMEET PIXY mic—Buckley responds immediately when you finish speaking!');
-    runConversationLoopCycle();
-  } else {
-    els.conversationToggleBtn.classList.remove('active');
-    els.conversationToggleBtn.textContent = '🎙️ Talk to Deerhead (Start Continuous Loop)';
-    stopDeerSpeech();
-    showToast('🛑 Conversation Stopped.');
-    if (els.deerStateBadge) els.deerStateBadge.textContent = '👀 Watching Room';
-  }
-}
-
-async function runConversationLoopCycle() {
-  if (!state.continuousConversationActive) return;
-
-  state.isListening = true;
-  if (els.deerStateBadge) els.deerStateBadge.textContent = '👂 Ears Perked (Listening...)';
-
-  try {
-    const res = await fetch('/api/mic/listen', { method: 'POST' });
-    const data = await res.json();
-
-    if (!state.continuousConversationActive) return;
-
-    if (data.transcript && data.transcript.trim()) {
-      const heard = data.transcript.trim();
-      showToast(`🎙️ You: "${heard}"`);
-      await handleVisitorMessageFast(heard);
-    } else {
-      // Loop back immediately if toggle is still ON
-      if (state.continuousConversationActive) {
-        setTimeout(runConversationLoopCycle, 200);
-      }
-    }
-  } catch (err) {
-    console.warn('Mic loop error:', err);
-    if (state.continuousConversationActive) {
-      setTimeout(runConversationLoopCycle, 600);
-    }
-  } finally {
-    state.isListening = false;
-  }
-}
-
-async function testMicrophoneLevel() {
-  const btns = [els.mainTestMicBtn, els.actionBarTestMicBtn, els.testMicBtn].filter(Boolean);
-  btns.forEach(b => {
-    b.textContent = '🛑 Speak into EMEET PIXY Mic...';
-    b.classList.add('active');
-  });
-  showToast('🎙️ Speak now! Testing microphone input...');
-
-  try {
-    const res = await fetch('/api/mic/listen', { method: 'POST' });
-    const data = await res.json();
-
-    if (data.transcript && data.transcript.trim()) {
-      const heard = data.transcript.trim();
-      if (els.micStatusText) els.micStatusText.textContent = `✅ Heard on EMEET PIXY Mic: "${heard}"`;
-      showToast(`🎙️ EMEET PIXY Mic Heard: "${heard}"`);
-      appendChatMessage('visitor', `[Mic Test]: ${heard}`);
-    } else {
-      if (els.micStatusText) els.micStatusText.textContent = `✅ EMEET PIXY Microphone active! Sound detected.`;
-      showToast(`✅ EMEET PIXY Mic is working! Check VU meter as you speak.`);
-    }
-  } catch (err) {
-    if (els.micStatusText) els.micStatusText.textContent = `⚠️ Mic error: ${err.message}`;
-  } finally {
-    if (els.mainTestMicBtn) {
-      els.mainTestMicBtn.textContent = '🎙️ Test Mic';
-      els.mainTestMicBtn.classList.remove('active');
-    }
-    if (els.actionBarTestMicBtn) {
-      els.actionBarTestMicBtn.textContent = '🎙️ Test Mic';
-      els.actionBarTestMicBtn.classList.remove('active');
-    }
-    if (els.testMicBtn) {
-      els.testMicBtn.textContent = '🎙️ Test Microphone Input Level';
-      els.testMicBtn.classList.remove('active');
-    }
-  }
-}
-
-// ============================================================================
-// ULTRA-FAST VISITOR MESSAGE & VISION HANDLER
+// ULTRA-FAST VISITOR MESSAGE & VISION HANDLER (GEMINI 3.8 FLASH)
 // ============================================================================
 async function handleVisitorMessage(text) {
   appendChatMessage('visitor', text);
   await triggerDeerVisionResponse(text);
-}
-
-async function handleVisitorMessageFast(text) {
-  appendChatMessage('visitor', text);
-  await triggerDeerVisionResponse(text);
-
-  // If continuous toggle is ON, immediately resume listening after speaking!
-  if (state.continuousConversationActive) {
-    setTimeout(runConversationLoopCycle, 300);
-  }
 }
 
 async function triggerDeerVisionResponse(promptText) {
@@ -581,7 +589,7 @@ async function triggerDeerVisionResponse(promptText) {
     state.history.push({ role: 'assistant', content: reply });
     if (state.history.length > 8) state.history = state.history.slice(-8);
 
-    if (els.lastProviderLabel) els.lastProviderLabel.textContent = data.provider || 'Google Gemini';
+    if (els.lastProviderLabel) els.lastProviderLabel.textContent = data.provider || 'Google Gemini (gemini-3.8-flash)';
     if (els.deerSpeechText) els.deerSpeechText.textContent = `"${reply}"`;
     appendChatMessage('deer', reply);
 
@@ -598,8 +606,8 @@ async function triggerDeerVisionResponse(promptText) {
     appendChatMessage('deer', msg);
   } finally {
     state.isThinking = false;
-    if (!state.continuousConversationActive && !state.isSpeaking && els.deerStateBadge) {
-      els.deerStateBadge.textContent = '👀 Tracking Room';
+    if (els.deerStateBadge) {
+      els.deerStateBadge.textContent = state.continuousConversationActive ? '👂 Ears Perked (Listening...)' : '👀 Tracking Room';
     }
   }
 }
@@ -625,8 +633,6 @@ function escapeHtml(str) {
 
 // ============================================================================
 // SPEECH SYNTHESIS & BINARY ON/OFF SOLENOID JAW CLAPPER
-// "Also, the jaw is not a servo. It's on or off"
-// Snaps fully OPEN [ON] and fully SHUT [OFF] like an electrical solenoid!
 // ============================================================================
 async function playAudioWav(audioDataUrl) {
   stopDeerSpeech();
@@ -689,7 +695,6 @@ function stopDeerSpeech() {
   stopBinarySolenoidJawClapper();
 }
 
-// Rapid binary solenoid clapper (snap OPEN on syllables, snap SHUT on pauses)
 function startBinarySolenoidJawClapper() {
   if (jawClapperTimer) clearInterval(jawClapperTimer);
   let isOpen = false;
@@ -710,8 +715,8 @@ function stopBinarySolenoidJawClapper() {
   if (window.Deerhead3D) {
     window.Deerhead3D.setJawSolenoidState(false); // Snap firmly SHUT [OFF]
   }
-  if (!state.continuousConversationActive && els.deerStateBadge) {
-    els.deerStateBadge.textContent = '👀 Tracking Room';
+  if (els.deerStateBadge) {
+    els.deerStateBadge.textContent = state.continuousConversationActive ? '👂 Ears Perked (Listening...)' : '👀 Tracking Room';
   }
 }
 
@@ -908,7 +913,7 @@ function evaluateSceneAndTrack(frameW, frameH) {
 
   const summaryParts = [];
   if (people.length > 0) {
-    summaryParts.push(`${people.length} person(s) spotted in front of 121 Tweed Blvd plaque`);
+    summaryParts.push(`${people.length} person(s) spotted in view of 121 Tweed Blvd plaque`);
   }
   if (objects.length > 0) {
     const objList = [...new Set(objects.map(o => o.class))].join(', ');
@@ -1034,7 +1039,7 @@ async function refreshWindows11HardwareList(forceRefresh = false) {
       }
     }
 
-    // 4. Populate System Voices in Hardware tab
+    // 4. System Voices in Hardware tab
     if (els.hwSystemVoicesGroup) {
       els.hwSystemVoicesGroup.innerHTML = '';
       const sysVoices = Array.isArray(data.voices) && data.voices.length > 0
@@ -1115,7 +1120,7 @@ async function saveGeminiApiKey(rawKey) {
     const data = await res.json();
     updateGeminiUiState(data);
     if (data.valid) {
-      showToast(`✅ Connected to Google Gemini Vision (${data.maskedKey})!`);
+      showToast(`✅ Connected to Google Gemini 3.8 Flash (${data.maskedKey})!`);
     } else {
       showToast(`⚠️ Gemini check: ${data.error || 'Invalid key'}`);
     }
@@ -1127,7 +1132,7 @@ async function saveGeminiApiKey(rawKey) {
 function updateGeminiUiState(data) {
   if (data.valid) {
     if (els.geminiStatusBadge) {
-      els.geminiStatusBadge.textContent = `✅ Gemini Ready (${data.maskedKey})`;
+      els.geminiStatusBadge.textContent = `✅ Gemini 3.8 Flash Ready (${data.maskedKey})`;
       els.geminiStatusBadge.className = 'status-pill status-ok';
     }
     els.quickKeyBanner?.classList.add('hidden');

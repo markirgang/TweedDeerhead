@@ -383,7 +383,7 @@ async function checkGeminiStatus(apiKey) {
 }
 
 // Call Google Gemini Multimodal API with zero thinking delay (thinkingBudget: 0)
-async function callGemini({ apiKey, model = 'gemini-2.5-flash', systemPrompt, userMessage, imageBase64, visionSummary, history = [] }) {
+async function callGemini({ apiKey, model = 'gemini-3.8-flash', systemPrompt, userMessage, imageBase64, visionSummary, history = [] }) {
   const cleanKey = (apiKey || process.env.GEMINI_API_KEY || '').trim();
   if (!cleanKey) {
     throw new Error('NO_GEMINI_KEY');
@@ -418,15 +418,14 @@ async function callGemini({ apiKey, model = 'gemini-2.5-flash', systemPrompt, us
   userParts.push({ text: combinedText });
   contents.push({ role: 'user', parts: userParts });
 
+  const activeModel = (model && !/2\.5/i.test(model)) ? model : 'gemini-3.8-flash';
   const generationConfig = {
     temperature: 0.75,
-    maxOutputTokens: 60
+    maxOutputTokens: 75,
+    thinkingConfig: { thinkingBudget: 0 }
   };
-  if (/2\.5/i.test(model)) {
-    generationConfig.thinkingConfig = { thinkingBudget: 0 };
-  }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(cleanKey)}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(activeModel)}:generateContent?key=${encodeURIComponent(cleanKey)}`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -439,11 +438,11 @@ async function callGemini({ apiKey, model = 'gemini-2.5-flash', systemPrompt, us
 
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`Gemini API (${model}) error ${res.status}: ${errText.slice(0, 180)}`);
+    throw new Error(`Gemini API (${activeModel}) error ${res.status}: ${errText.slice(0, 180)}`);
   }
 
   const data = await res.json();
-  const reply = data?.candidates?.[0]?.content?.parts?.map(p => p.text).join(' ')?.trim();
+  const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
   if (!reply) throw new Error('Empty response from Google Gemini');
   return reply;
 }
@@ -611,7 +610,7 @@ const server = http.createServer(async (req, res) => {
       const body = await parseBody(req);
       const {
         provider = 'gemini',
-        model = 'gemini-2.5-flash',
+        model = 'gemini-3.8-flash',
         apiKey,
         ollamaUrl = 'http://127.0.0.1:11434',
         customPersona,
@@ -634,14 +633,14 @@ const server = http.createServer(async (req, res) => {
         if (provider === 'gemini') {
           reply = await callGemini({
             apiKey,
-            model: model || 'gemini-2.5-flash',
+            model: (model && !/2\.5/i.test(model)) ? model : 'gemini-3.8-flash',
             systemPrompt,
             userMessage,
             imageBase64,
             visionSummary,
             history
           });
-          usedProvider = `Google Gemini (${model || 'gemini-2.5-flash'})`;
+          usedProvider = 'Google Gemini (gemini-3.8-flash)';
         } else {
           reply = await callOllama({
             ollamaUrl,

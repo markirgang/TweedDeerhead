@@ -400,12 +400,88 @@ body {
 }
 
 /* ============================================================================
-   REAL-TIME MICROPHONE VU METER
+   CONTINUOUS TALK BUTTON + VU METER DIRECTLY UNDER IT
    ============================================================================ */
-.vu-meter-card {
-  background: #18110b;
-  border: 1px solid var(--border-wood);
-  padding: 0.75rem 1rem;
+.talk-vu-combo-card {
+  background: #19120b;
+  border: 2px solid var(--border-wood);
+  padding: 1rem 1.15rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+}
+
+.talk-button-wrapper {
+  width: 100%;
+}
+
+.btn-continuous-talk {
+  width: 100%;
+  background: linear-gradient(135deg, #1b532c 0%, #10331b 100%);
+  border: 2px solid var(--pixy-green);
+  color: #ffffff;
+  padding: 0.85rem 1.25rem;
+  border-radius: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  text-align: left;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 16px rgba(56, 239, 125, 0.25);
+}
+
+.btn-continuous-talk:hover {
+  filter: brightness(1.15);
+}
+
+.btn-continuous-talk.active {
+  background: linear-gradient(135deg, #246d3b 0%, #154524 100%);
+  border-color: #5ff597;
+  box-shadow: 0 0 20px rgba(56, 239, 125, 0.45);
+}
+
+.btn-continuous-talk.paused {
+  background: #251a11;
+  border-color: var(--border-wood);
+  color: var(--text-muted);
+  box-shadow: none;
+}
+
+.btn-talk-icon {
+  font-size: 1.8rem;
+  line-height: 1;
+}
+
+.btn-talk-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.btn-talk-text strong {
+  font-size: 1.05rem;
+  letter-spacing: 0.04em;
+  color: #ffffff;
+}
+
+.btn-talk-text small {
+  font-size: 0.82rem;
+  color: #c9e8d2;
+}
+
+.btn-continuous-talk.paused .btn-talk-text small {
+  color: var(--text-muted);
+}
+
+.vu-meter-under-button {
+  background: #0f0a06;
+  border: 1px solid #382516;
+  border-radius: 10px;
+  padding: 0.75rem 0.95rem;
+  display: flex;
+  flex-direction: column;
   gap: 0.5rem;
 }
 
@@ -414,6 +490,13 @@ body {
   justify-content: space-between;
   align-items: center;
   font-size: 0.85rem;
+}
+
+.vu-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-main);
 }
 
 .vu-actions {

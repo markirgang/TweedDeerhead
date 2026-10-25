@@ -22,7 +22,7 @@
         <h1 class="brand-title">TWEED DEERHEAD &amp; MOOSE</h1>
         <p class="brand-subtitle">
           <span class="pin-badge">📍 Wall Mount: 121 Tweed Blvd, Nyack, NY 10960</span>
-          <span id="geminiStatusBadge" class="status-pill status-warn">🔑 Paste Gemini Key</span>
+          <span id="geminiStatusBadge" class="status-pill status-ok">✅ Gemini Ready (3.8 Flash)</span>
           <span id="camStatusBadge" class="status-pill status-ok">📹 EMEET PIXY: LIVE</span>
           <span id="hwScanBadge" class="status-pill status-ok">✅ Win 11 Hardware Scanned</span>
         </p>
@@ -43,10 +43,10 @@
     </nav>
   </header>
 
-  <!-- QUICK GEMINI API KEY BAR (Shown until key is saved) -->
-  <div id="quickKeyBanner" class="quick-key-banner">
+  <!-- QUICK GEMINI API KEY BAR (Shown if key is ever missing) -->
+  <div id="quickKeyBanner" class="quick-key-banner hidden">
     <div class="quick-key-inner">
-      <span>🔑 <strong>Google Gemini Vision Backend:</strong> Paste your Google Gemini API Key to activate instant Gemini Vision (Local AI active until key is saved):</span>
+      <span>🔑 <strong>Google Gemini Vision Backend:</strong> Paste your Google Gemini API Key to activate instant Gemini Vision:</span>
       <div class="quick-key-form">
         <input type="password" id="quickGeminiKeyInput" placeholder="AIzaSy..." autocomplete="off" />
         <button type="button" id="quickSaveKeyBtn" class="btn btn-amber">Save &amp; Connect Gemini</button>
@@ -63,7 +63,7 @@
   <main id="tab-live" class="tab-panel active" role="tabpanel">
     <div class="main-dashboard-stack">
 
-      <!-- DUAL WINDOW VIEWPORT GRID: VIDEO VIEW ON LEFT, SMALLER 3D MOOSE ON RIGHT -->
+      <!-- DUAL VIEWPORT GRID: VIDEO VIEW ON LEFT, SMALLER 3D MOOSE ON RIGHT -->
       <section class="card dual-viewport-card">
         <div class="dual-viewport-grid">
 
@@ -114,14 +114,14 @@
               </button>
             </div>
 
-            <!-- 3D THREE.JS TALKING MOOSE STAGE (Articulated jaw + moving eyes + drag to rotate) -->
+            <!-- 3D THREE.JS TALKING MOOSE STAGE (Solenoid jaw + moving eyes + drag to rotate) -->
             <div class="moose-3d-stage-wrapper">
               <div id="deer3dContainer" class="moose-3d-canvas" title="Click and drag to rotate Buckley in 3D!">
                 <div class="loading-3d-spinner">Loading 3D Animatronic Moose...</div>
               </div>
               <div class="moose-3d-telemetry-overlay">
                 <span>📐 Servos: <strong id="hud3dYawPitch">Yaw: 0.0° | Pitch: 0.0°</strong></span>
-                <span>👄 Jaw: <strong id="hud3dJawAngle">0.0°</strong></span>
+                <span>👄 Jaw Solenoid: <strong id="hud3dJawAngle">[SHUT - OFF]</strong></span>
               </div>
             </div>
           </div>
@@ -129,39 +129,54 @@
         </div>
       </section>
 
-      <!-- REAL-TIME MICROPHONE VU METER CARD WITH TEST MIC BUTTON -->
-      <section class="card vu-meter-card">
-        <div class="vu-meter-header">
-          <div class="vu-title">
-            <span id="vuStatusDot" class="vu-dot"></span>
-            <strong>🎙️ Microphone Level (VU Meter):</strong>
-            <span id="vuLevelLabel">0% (-∞ dB)</span>
-          </div>
-          <div class="vu-actions">
-            <button type="button" id="mainTestMicBtn" class="btn btn-amber btn-sm" title="Click to test the EMEET PIXY microphone and see the VU meter move!">
-              🎙️ Test Mic
-            </button>
-            <span id="micStateBadge" class="vu-badge">Standby (Mic Ready)</span>
-          </div>
+      <!-- CONTINUOUS TALK BUTTON + VU METER DIRECTLY UNDER IT -->
+      <section class="card talk-vu-combo-card">
+        <!-- 1. CONTINUOUS CONVERSATION BUTTON (STAYS ON CONTINUOUSLY FOR THE ENTIRE SESSION!) -->
+        <div class="talk-button-wrapper">
+          <button type="button" id="conversationToggleBtn" class="btn-continuous-talk active">
+            <span class="btn-talk-icon">🟢</span>
+            <div class="btn-talk-text">
+              <strong id="talkBtnHeading">TALK TO DEERHEAD: LISTENING CONTINUOUSLY</strong>
+              <small id="talkBtnSubtext">Active for entire session. Speak anytime—Buckley responds immediately. (Click to pause)</small>
+            </div>
+          </button>
         </div>
-        <div class="vu-led-ladder" id="vuLedLadder">
-          <!-- 16-Segment Color LED Ladder (Green -> Yellow -> Red) -->
-          <div class="vu-seg green" data-idx="0"></div>
-          <div class="vu-seg green" data-idx="1"></div>
-          <div class="vu-seg green" data-idx="2"></div>
-          <div class="vu-seg green" data-idx="3"></div>
-          <div class="vu-seg green" data-idx="4"></div>
-          <div class="vu-seg green" data-idx="5"></div>
-          <div class="vu-seg green" data-idx="6"></div>
-          <div class="vu-seg green" data-idx="7"></div>
-          <div class="vu-seg green" data-idx="8"></div>
-          <div class="vu-seg green" data-idx="9"></div>
-          <div class="vu-seg yellow" data-idx="10"></div>
-          <div class="vu-seg yellow" data-idx="11"></div>
-          <div class="vu-seg yellow" data-idx="12"></div>
-          <div class="vu-seg yellow" data-idx="13"></div>
-          <div class="vu-seg red" data-idx="14"></div>
-          <div class="vu-seg red" data-idx="15"></div>
+
+        <!-- 2. VU METER DIRECTLY UNDER THE BUTTON -->
+        <div class="vu-meter-under-button">
+          <div class="vu-meter-header">
+            <div class="vu-title">
+              <span id="vuStatusDot" class="vu-dot active"></span>
+              <strong>🎙️ Real-Time EMEET PIXY Mic Level (VU Meter):</strong>
+              <span id="vuLevelLabel">0% (-∞ dB)</span>
+            </div>
+            <div class="vu-actions">
+              <button type="button" id="mainTestMicBtn" class="btn btn-amber btn-sm" title="Click to test the EMEET PIXY mic and verify input!">
+                🎙️ Test Mic
+              </button>
+              <span id="micStateBadge" class="vu-badge listening">Listening Continuously</span>
+            </div>
+          </div>
+
+          <div class="vu-led-ladder" id="vuLedLadder">
+            <!-- 16-Segment Color LED Ladder (Green -> Yellow -> Red) -->
+            <div class="vu-seg green" data-idx="0"></div>
+            <div class="vu-seg green" data-idx="1"></div>
+            <div class="vu-seg green" data-idx="2"></div>
+            <div class="vu-seg green" data-idx="3"></div>
+            <div class="vu-seg green" data-idx="4"></div>
+            <div class="vu-seg green" data-idx="5"></div>
+            <div class="vu-seg green" data-idx="6"></div>
+            <div class="vu-seg green" data-idx="7"></div>
+            <div class="vu-seg green" data-idx="8"></div>
+            <div class="vu-seg green" data-idx="9"></div>
+            <div class="vu-seg yellow" data-idx="10"></div>
+            <div class="vu-seg yellow" data-idx="11"></div>
+            <div class="vu-seg yellow" data-idx="12"></div>
+            <div class="vu-seg yellow" data-idx="13"></div>
+            <div class="vu-seg red" data-idx="14"></div>
+            <div class="vu-seg red" data-idx="15"></div>
+          </div>
         </div>
       </section>
 
@@ -186,9 +201,9 @@
           <div class="quick-hw-item">
             <label for="quickVoicePresetSelect">🗣️ Voice Choices:</label>
             <select id="quickVoicePresetSelect" class="hw-select-compact">
-              <option value="deep-buck">🦌 Deep Mountain Buck (Mark / David Low Resonance)</option>
-              <option value="witty-trail" selected>🌲 Witty Tweed Trail King (Mark Natural Tone)</option>
-              <option value="ancient-oak">🪵 Ancient Oak Trophy (David Deep Echo)</option>
+              <option value="deep-buck">🦌 Deep Mountain Buck (David / Mark Low)</option>
+              <option value="witty-trail" selected>🌲 Witty Tweed Trail King (Mark / David Natural)</option>
+              <option value="ancient-oak">🪵 Ancient Oak Trophy (David Deep Resonance)</option>
               <option value="nyack-radio">🎙️ Nyack Radio Host (David Clean)</option>
               <option value="fast-scout">⚡ Fast Hudson Valley Scout (Mark Upbeat)</option>
               <option value="rustic-lady">🍂 Rustic Lady Doe (Zira Natural)</option>
@@ -197,7 +212,7 @@
         </div>
       </section>
 
-      <!-- ACTION BUTTONS: TOGGLE TALK, LOOK & SPEAK, HUSH -->
+      <!-- SECONDARY ACTIONS (LOOK & SPEAK, HUSH) -->
       <section class="card action-card">
         <div class="vision-action-bar">
           <div class="telemetry-readout">
@@ -205,13 +220,6 @@
             <span id="liveTelemetryText">Scanning room at 121 Tweed Blvd...</span>
           </div>
           <div class="action-buttons">
-            <!-- TOGGLE BUTTON: Stays ON once pressed in continuous loop until clicked again! -->
-            <button type="button" id="conversationToggleBtn" class="btn btn-toggle-talk" title="Click once to start continuous conversation. Click again to stop!">
-              🎙️ Talk to Deerhead (Start Continuous Loop)
-            </button>
-            <button type="button" id="actionBarTestMicBtn" class="btn btn-secondary" title="Test the EMEET PIXY mic and verify input levels">
-              🎙️ Test Mic
-            </button>
             <button type="button" id="lookAndSpeakBtn" class="btn btn-amber" title="Capture a frame from the Pixy webcam and make Buckley comment immediately!">
               📸 Look &amp; Speak Now
             </button>
@@ -227,10 +235,10 @@
         <div class="speech-bubble" id="deerSpeechBubble">
           <div class="speech-meta">
             <strong>🦌 Buckley (Mounted @ 121 Tweed Blvd, Nyack, NY 10960):</strong>
-            <span id="lastProviderLabel">Ready</span>
+            <span id="lastProviderLabel">Google Gemini (gemini-3.8-flash)</span>
           </div>
           <p id="deerSpeechText">
-            "Well hooves and antlers! I'm mounted right here on the wall at 121 Tweed Blvd in Nyack, NY 10960! Click 'Talk to Deerhead' or type below to chat!"
+            "Well hooves and antlers! I'm mounted on the wall at 121 Tweed Blvd in Nyack, NY 10960! Continuous listening is on—just speak and I'll answer right away!"
           </p>
         </div>
 
@@ -240,7 +248,7 @@
             <input
               type="text"
               id="chatInput"
-              placeholder="Type a message to Buckley at 121 Tweed Blvd (or toggle 'Talk to Deerhead')..."
+              placeholder="Or type a message to Buckley at 121 Tweed Blvd..."
               autocomplete="off"
             />
             <button type="submit" id="sendChatBtn" class="btn btn-amber">Send &amp; Include Frame</button>
@@ -357,12 +365,12 @@
           <div class="form-group">
             <label for="voiceSelect">Windows 11 Voice / Preset:</label>
             <select id="voiceSelect" class="hw-select">
-              <optgroup label="🦌 Handcrafted Deerhead Character Presets">
-                <option value="preset-deep-buck">🦌 Deep Mountain Buck (Mark / David Low Resonance)</option>
-                <option value="preset-witty-trail" selected>🌲 Witty Tweed Trail King (Mark Natural Tone)</option>
+              <optgroup label="🦌 Handcrafted Character Presets">
+                <option value="preset-deep-buck">🦌 Deep Mountain Buck (David / Mark Low Pitch)</option>
+                <option value="preset-witty-trail" selected>🌲 Witty Tweed Trail King (Mark / David Natural)</option>
                 <option value="preset-ancient-oak">🪵 Ancient Oak Trophy (David Deep Echo)</option>
-                <option value="preset-nyack-radio">🎙️ Nyack Radio Host (David Crisp)</option>
-                <option value="preset-fast-scout">⚡ Fast Hudson Valley Scout (Mark Rapid)</option>
+                <option value="preset-nyack-radio">🎙️ Nyack Radio Host (David Clean)</option>
+                <option value="preset-fast-scout">⚡ Fast Hudson Valley Scout (Mark Upbeat)</option>
                 <option value="preset-rustic-lady">🍂 Rustic Lady Doe (Zira Natural)</option>
               </optgroup>
               <optgroup label="🗣️ Windows 11 Installed System Voices" id="hwSystemVoicesGroup">
@@ -390,7 +398,7 @@
           </div>
 
           <div class="hw-btn-row">
-            <button type="button" id="testSpeakerBtn" class="btn btn-amber">🔊 Test Selected Voice &amp; 3D Jaw</button>
+            <button type="button" id="testSpeakerBtn" class="btn btn-amber">🔊 Test Selected Voice &amp; Solenoid Jaw</button>
           </div>
         </section>
 
@@ -423,7 +431,7 @@
             <div class="form-group">
               <label for="aiProviderSelect">AI Backend Provider:</label>
               <select id="aiProviderSelect" class="hw-select">
-                <option value="gemini" selected>Google Gemini API (Multimodal Vision + Chat — Recommended)</option>
+                <option value="gemini" selected>Google Gemini API (gemini-3.8-flash — Recommended)</option>
                 <option value="ollama">Local Ollama (Offline Fallback on this PC)</option>
               </select>
             </div>
@@ -440,10 +448,9 @@
             <div class="form-group">
               <label for="geminiModelSelect">Google Gemini Vision Model:</label>
               <select id="geminiModelSelect" class="hw-select">
-                <option value="gemini-2.5-flash" selected>gemini-2.5-flash (Fast Multimodal Vision — Recommended)</option>
-                <option value="gemini-2.5-pro">gemini-2.5-pro (Deep Reasoning + Vision)</option>
-                <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+                <option value="gemini-3.8-flash" selected>gemini-3.8-flash (Latest Fast Vision — Zero Thinking Delay)</option>
                 <option value="gemini-flash-latest">gemini-flash-latest</option>
+                <option value="gemini-4-argon">gemini-4-argon (Flagship Reasoning)</option>
               </select>
             </div>
 
