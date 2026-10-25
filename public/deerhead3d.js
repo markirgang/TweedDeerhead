@@ -37,9 +37,10 @@ window.Deerhead3D = (function () {
     scene.background = new THREE.Color(0x130e0a);
     scene.fog = new THREE.FogExp2(0x130e0a, 0.05);
 
-    // 2. Camera
+    // 2. Camera (distance is re-fitted to the panel aspect so the whole rack
+    //    stays in frame whether the window is wide or narrow)
     camera = new THREE.PerspectiveCamera(42, width / height, 0.1, 100);
-    camera.position.set(0, 0.35, 4.2);
+    fitCameraToPanel(width, height);
 
     // 3. Renderer
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -71,11 +72,19 @@ window.Deerhead3D = (function () {
     buildWallAndPlaque();
     buildMooseModel();
 
+    // Fit the camera now that the model exists, then keep it fitted on resize
+    modelBounds = computeModelBounds();
+    onWindowResize();
+
     // 6. Interactive Mouse Drag Orbit Controls
     setupOrbitControls();
 
-    // 7. Resize Observer
+    // 7. Resize handling (window resize + panel resize, e.g. layout changes)
     window.addEventListener('resize', onWindowResize);
+    if (window.ResizeObserver) {
+      const ro = new ResizeObserver(() => onWindowResize());
+      ro.observe(container);
+    }
 
     // 8. Animation Loop
     animate();
@@ -88,6 +97,51 @@ window.Deerhead3D = (function () {
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
     renderer.setSize(width, height);
+    fitCameraToPanel(width, height);
+  }
+
+  // Keep the whole trophy (rack included) in frame: a perspective camera holds
+  // its VERTICAL field of view, so a narrow column crops the sides. Fit the
+  // camera to the model's real bounding box instead of a guessed distance.
+  let modelBounds = null;
+  const BASE_DISTANCE = 4.2;
+
+  function computeModelBounds() {
+    if (!THREE || !THREE.Box3) return null;
+    const box = new THREE.Box3();
+    let any = false;
+    [plaqueGroup, deerGroup].forEach((g) => {
+      if (g) { box.expandByObject(g); any = true; }
+    });
+    return any && !box.isEmpty() ? box : null;
+  }
+
+  function fitCameraToPanel(width, height) {
+    if (!camera) return;
+    const aspect = Math.max(0.2, (width || 360) / (height || 340));
+    const halfFov = (camera.fov * Math.PI) / 360;
+    const tanHalf = Math.tan(halfFov);
+
+    const bounds = modelBounds || computeModelBounds();
+    if (!bounds) {
+      camera.position.set(0, 0.35, BASE_DISTANCE);
+      camera.lookAt(0, 0.2, 0);
+      return;
+    }
+
+    const size = bounds.getSize(new THREE.Vector3());
+    const center = bounds.getCenter(new THREE.Vector3());
+
+    // 8% breathing room so antler tips never touch the panel edges
+    const halfW = Math.max(size.x / 2, 0.5) * 1.08;
+    const halfH = Math.max(size.y / 2, 0.5) * 1.08;
+
+    const distanceForWidth = halfW / (tanHalf * aspect);
+    const distanceForHeight = halfH / tanHalf;
+    const distance = Math.max(distanceForWidth, distanceForHeight, 2.4);
+
+    camera.position.set(0, center.y + 0.05, center.z + distance);
+    camera.lookAt(0, center.y, center.z);
   }
 
   // --- BUILD SHIELD OAK WALL PLAQUE WITH BRASS NAMEPLATE ---
@@ -386,7 +440,9 @@ window.Deerhead3D = (function () {
 
   function resetView() {
     targetRotation = { x: 0, y: 0 };
-    if (camera) camera.position.set(0, 0.35, 4.2);
+    if (container) {
+      fitCameraToPanel(container.clientWidth || 360, container.clientHeight || 340);
+    }
   }
 
   function setTargetTracking(normX, normY) {

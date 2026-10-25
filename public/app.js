@@ -35,6 +35,7 @@ const state = {
   currentAudio: null,
   history: [],
   win11Hardware: null,
+  pixyTracking: 'unknown',
   settings: {
     cameraId: localStorage.getItem('tweed_cameraId') || '0',
     micId: localStorage.getItem('tweed_micId') || 'mic-pixy',
@@ -156,10 +157,9 @@ function bindElements() {
   // RESET VIDEO FEED BUTTON (Reconnects and resets DirectShow capture immediately)
   els.resetVideoFeedBtn?.addEventListener('click', () => resetVideoFeed());
 
-  // EMEET Hardware Tracking Trigger
-  els.triggerEmeetTrackingBtn?.addEventListener('click', () => {
-    showToast('🎯 Hardware tracking hint: Hold an open palm ✋ in front of the camera lens for 2s to toggle motorized tracking.');
-  });
+  // EMEET PIXY MOTORIZED AI TRACKING TOGGLE (vendor HID — no EMEET app needed)
+  els.triggerEmeetTrackingBtn?.addEventListener('click', () => togglePixyTracking());
+  refreshPixyTrackingState();
 
   // CONTINUOUS TALK BUTTON TOGGLE (STAYS ON FOR ENTIRE SESSION!)
   els.conversationToggleBtn?.addEventListener('click', toggleContinuousConversation);
@@ -753,6 +753,86 @@ function stopBinarySolenoidJawClapper() {
 }
 
 // ============================================================================
+// EMEET PIXY MOTORIZED AI TRACKING (vendor HID — no EMEET app required)
+// ============================================================================
+state.pixyTracking = state.pixyTracking || 'unknown';
+let pixyTrackingBusy = false;
+function renderPixyTrackingButton() {
+  const btn = els.triggerEmeetTrackingBtn;
+  if (!btn) return;
+  const mode = state.pixyTracking;
+  if (mode === 'tracking') {
+    btn.textContent = '🎯 Tracking: ON';
+    btn.classList.add('btn-amber-micro');
+    btn.title = 'The PIXY is following faces with its motorized gimbal. Click to stop tracking.';
+  } else if (mode === 'idle') {
+    btn.textContent = '🎯 Tracking: OFF';
+    btn.classList.remove('btn-amber-micro');
+    btn.title = "The PIXY gimbal is parked. Click to start following faces automatically.";
+  } else if (mode === 'privacy') {
+    btn.textContent = '🎯 Tracking: Privacy';
+    btn.classList.remove('btn-amber-micro');
+    btn.title = 'The PIXY is in privacy mode. Click to turn face tracking back on.';
+  } else {
+    btn.textContent = '🎯 Tracking: …';
+  }
+}
+
+async function refreshPixyTrackingState() {
+  try {
+    const res = await fetch('/api/camera/tracking', { cache: 'no-store' });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data && data.modeName && data.modeName !== 'unknown') {
+      state.pixyTracking = data.modeName;
+    }
+  } catch {}
+  renderPixyTrackingButton();
+}
+
+async function togglePixyTracking() {
+  if (pixyTrackingBusy) return;
+  pixyTrackingBusy = true;
+
+  const enable = state.pixyTracking !== 'tracking';
+  const action = enable ? 'tracking' : 'idle';
+
+  if (els.triggerEmeetTrackingBtn) {
+    els.triggerEmeetTrackingBtn.textContent = enable ? '🎯 Tracking: starting…' : '🎯 Tracking: stopping…';
+  }
+  showToast(enable
+    ? '🎯 Turning on PIXY motorized face tracking…'
+    : '🎯 Turning off PIXY face tracking…');
+
+  try {
+    const res = await fetch('/api/camera/tracking', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action })
+    });
+    const data = await res.json();
+
+    if (data && data.ok) {
+      state.pixyTracking = data.modeName || action;
+      renderPixyTrackingButton();
+      showToast(state.pixyTracking === 'tracking'
+        ? '✅ PIXY is now following you automatically.'
+        : '✅ PIXY tracking stopped — gimbal parked.');
+    } else {
+      state.pixyTracking = 'unknown';
+      renderPixyTrackingButton();
+      showToast(`⚠️ PIXY tracking failed: ${(data && data.error) || 'device not responding'}`);
+    }
+  } catch (err) {
+    state.pixyTracking = 'unknown';
+    renderPixyTrackingButton();
+    showToast(`⚠️ PIXY tracking error: ${err.message}`);
+  } finally {
+    pixyTrackingBusy = false;
+  }
+}
+
+// ============================================================================
 // VIDEO FEED UI HELPERS
 // ============================================================================
 function setVideoPlaceholder(title, hint, visible) {
@@ -955,6 +1035,9 @@ async function resetVideoFeed(isAutomatic = false) {
     );
     showToast('⚠️ Still no picture from the camera.');
   }
+
+  // A DirectShow reopen can drop the gimbal back to idle — restore tracking.
+  refreshPixyTrackingState();
 }
 
 // ============================================================================

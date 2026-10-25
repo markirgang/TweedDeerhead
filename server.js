@@ -12,6 +12,10 @@ const ENV_FILE = path.join(__dirname, '.env');
 // Last known mic VU reading, served instantly if the mic daemon is busy
 let lastMicLevel = { level: 0, device: null };
 
+// Cached EMEET PIXY gimbal state (tracking is enabled automatically at startup)
+let pixyTrackingMode = 'unknown';
+let pixyTrackingAvailable = true;
+
 // ============================================================================
 // 1. DO NOT AUTO-LAUNCH EMEETLINK (Prevents camera feed blockage & blue 'e' logo)
 // ============================================================================
@@ -191,6 +195,43 @@ function parseBody(req) {
       }
     });
     req.on('error', reject);
+  });
+}
+
+// Talk to the Python camera bridge's HID endpoints (tracking / idle / privacy / status)
+function requestPixyAction(action, timeoutMs = 8000) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (payload) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      pixyTrackingAvailable = payload.ok !== false;
+      resolve(payload);
+    };
+    const timer = setTimeout(() => finish({ ok: false, error: 'PIXY HID request timed out' }), timeoutMs);
+
+    const req = http.request(
+      { host: '127.0.0.1', port: 3122, path: `/pixy/${encodeURIComponent(action)}`, method: 'GET', timeout: timeoutMs },
+      (pxRes) => {
+        let body = '';
+        pxRes.on('data', (chunk) => { body += chunk; });
+        pxRes.on('end', () => {
+          try {
+            const parsed = JSON.parse(body || '{}');
+            if (typeof parsed.modeName === 'string' && parsed.modeName !== 'unknown') {
+              pixyTrackingMode = parsed.modeName;
+            }
+            finish(parsed);
+          } catch {
+            finish({ ok: false, error: 'unreadable response from camera bridge' });
+          }
+        });
+      }
+    );
+    req.on('timeout', () => { req.destroy(); finish({ ok: false, error: 'PIXY HID request timed out' }); });
+    req.on('error', (err) => finish({ ok: false, error: err.message }));
+    req.end();
   });
 }
 
@@ -544,11 +585,42 @@ const server = http.createServer(async (req, res) => {
   // Force-reset DirectShow video capture stream if stalled
   if (pathname === '/api/camera/reset' && req.method === 'POST') {
     http.get('http://127.0.0.1:3122/reset', (resetRes) => {
+      resetRes.resume();
       sendJson(res, 200, { ok: true, message: 'Camera DirectShow bridge reset triggered' });
     }).on('error', () => {
       sendJson(res, 200, { ok: true, message: 'Bridge restarted' });
     });
     return;
+  }
+
+  // ---------------------------------------------------------------------
+  // EMEET PIXY gimbal / AI tracking control (vendor HID, no EMEET app)
+  // ---------------------------------------------------------------------
+  if (pathname === '/api/camera/tracking' && req.method === 'GET') {
+    const status = await requestPixyAction('status');
+    return sendJson(res, 200, status);
+  }
+
+  if (pathname === '/api/camera/tracking' && req.method === 'POST') {
+    let body = {};
+    try {
+      body = await parseBody(req);
+    } catch {
+      body = {};
+    }
+    const action = String((body && body.action) || 'tracking').toLowerCase();
+    const allowed = ['tracking', 'track', 'idle', 'privacy', 'gesture'];
+    if (!allowed.includes(action)) {
+      return sendJson(res, 400, { ok: false, error: `unknown action: ${action}` });
+    }
+    const result = await requestPixyAction(action);
+    if (result.ok) {
+      pixyTrackingMode = action === 'privacy' ? 'privacy' : action === 'idle' ? 'idle' : 'tracking';
+      console.log(`[Pixy] Gimbal mode -> ${pixyTrackingMode}`);
+    } else {
+      console.warn(`[Pixy] Gimbal action "${action}" failed: ${result.error || 'unknown error'}`);
+    }
+    return sendJson(res, result.ok ? 200 : 500, result);
   }
 
   // Proxy real-time RMS microphone VU level from Python sounddevice daemon
@@ -756,4 +828,33 @@ server.listen(PORT, () => {
   console.log(`👄 Solenoid Jaw: Binary ON/OFF Action`);
   console.log(`🌐 Open in Browser: http://localhost:${PORT}`);
   console.log(`🦌 ============================================================\n`);
+
+  // Turn on the PIXY's built-in AI tracking automatically (via vendor HID,
+  // so the EMEET app never has to run and never grabs the camera).
+  enablePixyTrackingOnStartup();
 });
+
+async function enablePixyTrackingOnStartup(attempt = 1) {
+  if (process.env.PIXY_AUTO_TRACK === '0') {
+    console.log('[Pixy] Auto-tracking disabled by PIXY_AUTO_TRACK=0');
+    return;
+  }
+
+  // Ask the bridge to switch the gimbal into AI tracking mode. This is retried
+  // because the camera bridge needs a couple of seconds to scan the cameras.
+  const result = await requestPixyAction('tracking');
+
+  if (result && result.ok) {
+    pixyTrackingMode = 'tracking';
+    console.log('[Pixy] AI gimbal tracking is ON');
+    return;
+  }
+
+  if (attempt >= 5) {
+    console.warn(`[Pixy] Could not enable AI tracking: ${result && result.error ? result.error : 'unknown error'}`);
+    console.warn('[Pixy] Video keeps working — use the Tracking button in the app to retry.');
+    return;
+  }
+
+  setTimeout(() => enablePixyTrackingOnStartup(attempt + 1), 2500);
+}

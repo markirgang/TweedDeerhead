@@ -236,16 +236,18 @@ body {
 }
 
 /* ============================================================================
-   DUAL VIEWPORT GRID: VIDEO VIEW ON LEFT, SMALLER 3D MOOSE ON RIGHT
+   DUAL VIEWPORT GRID: 3D MOOSE ON THE LEFT, LIVE VIDEO BESIDE IT ON THE RIGHT
    ============================================================================ */
 .dual-viewport-grid {
   display: grid;
-  grid-template-columns: 1.25fr 0.85fr;
-  gap: 1.1rem;
+  /* Left column hugs the 3D moose, right column takes the rest for the video */
+  grid-template-columns: minmax(230px, 0.8fr) minmax(300px, 1.4fr);
+  gap: 1rem;
   align-items: stretch;
 }
 
-@media (max-width: 960px) {
+/* Only stack when there is genuinely no room for two windows */
+@media (max-width: 700px) {
   .dual-viewport-grid {
     grid-template-columns: 1fr;
   }
@@ -286,8 +288,8 @@ body {
   position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
-  min-height: 310px;
-  max-height: 380px;
+  min-height: 240px;
+  max-height: 420px;
   background: #080604;
   border: 2px solid var(--border-wood);
   border-radius: 10px;
@@ -385,19 +387,27 @@ body {
   font-weight: 700;
 }
 
-/* 2. SMALLER 3D TALKING MOOSE ANIMATION WINDOW */
+/* 2. SMALLER 3D TALKING MOOSE ANIMATION WINDOW (fills its column height) */
 .moose-3d-stage-wrapper {
   position: relative;
   width: 100%;
-  aspect-ratio: 4 / 3;
-  min-height: 310px;
-  max-height: 380px;
+  flex: 1 1 auto;
+  min-height: 240px;
+  max-height: 420px;
   background: #110c08;
   border: 2px solid var(--border-wood);
   border-radius: 10px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+.moose-3d-viewport-box {
+  min-width: 0;
+}
+
+.video-viewport-box {
+  min-width: 0;
 }
 
 .moose-3d-canvas {
@@ -429,14 +439,21 @@ body {
   right: 8px;
   display: flex;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.55rem;
   background: rgba(12, 8, 5, 0.82);
   border: 1px solid rgba(229, 154, 60, 0.45);
   border-radius: 6px;
   padding: 0.25rem 0.65rem;
-  font-size: 0.74rem;
+  font-size: 0.7rem;
+  line-height: 1.35;
   font-family: Consolas, monospace;
   color: var(--amber-bright);
   pointer-events: none;
+}
+
+.moose-3d-telemetry-overlay > span {
+  white-space: nowrap;
 }
 
 .moose-3d-telemetry-overlay strong {

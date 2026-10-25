@@ -63,11 +63,35 @@
   <main id="tab-live" class="tab-panel active" role="tabpanel">
     <div class="main-dashboard-stack">
 
-      <!-- DUAL VIEWPORT GRID: VIDEO VIEW ON LEFT, SMALLER 3D MOOSE ON RIGHT -->
+      <!-- DUAL VIEWPORT GRID: 3D MOOSE ON THE LEFT, LIVE VIDEO BESIDE IT -->
       <section class="card dual-viewport-card">
         <div class="dual-viewport-grid">
 
-          <!-- 1. PRIMARY WINDOW: LIVE PIXY WEBCAM VIDEO WINDOW -->
+          <!-- 1. LEFT WINDOW: 3D TALKING MOOSE ANIMATION -->
+          <div class="viewport-box moose-3d-viewport-box">
+            <div class="viewport-header">
+              <div class="vp-title-group">
+                <span class="vp-icon">🦌</span>
+                <strong>3D Talking Moose Animation</strong>
+              </div>
+              <button type="button" id="reset3dViewBtn" class="btn-micro" title="Reset 3D camera angle">
+                🔄 Reset Angle
+              </button>
+            </div>
+
+            <!-- 3D THREE.JS TALKING MOOSE STAGE (Solenoid jaw + moving eyes + drag to rotate) -->
+            <div class="moose-3d-stage-wrapper">
+              <div id="deer3dContainer" class="moose-3d-canvas" title="Click and drag to rotate Buckley in 3D!">
+                <div class="loading-3d-spinner">Loading 3D Animatronic Moose...</div>
+              </div>
+              <div class="moose-3d-telemetry-overlay">
+                <span>📐 Servos: <strong id="hud3dYawPitch">Yaw: 0.0° | Pitch: 0.0°</strong></span>
+                <span>👄 Jaw Solenoid: <strong id="hud3dJawAngle">[SHUT - OFF]</strong></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 2. RIGHT WINDOW: LIVE PIXY WEBCAM VIDEO -->
           <div class="viewport-box video-viewport-box">
             <div class="viewport-header">
               <div class="vp-title-group">
@@ -78,8 +102,8 @@
                 <button type="button" id="resetVideoFeedBtn" class="btn-micro btn-amber-micro" title="Click to immediately reconnect and reset the camera feed if the video ever freezes or stops">
                   🔄 Reset Video Feed
                 </button>
-                <button type="button" id="triggerEmeetTrackingBtn" class="btn-micro" title="Hardware tracking info: hold open palm in front of camera for 2s">
-                  🎯 Tracking Info
+                <button type="button" id="triggerEmeetTrackingBtn" class="btn-micro" title="Turn the PIXY's motorized AI face-tracking on or off (no EMEET app needed)">
+                  🎯 Tracking: …
                 </button>
                 <label class="toggle-chip" title="Automatically greet people when the Pixy webcam spots someone!">
                   <input type="checkbox" id="autoGreetToggle" checked />
@@ -106,30 +130,6 @@
                 <span class="hud-tag" id="hudFpsTag">EMEET PIXY: ACTIVE</span>
                 <span class="hud-tag" id="hudTargetTag">👀 Targets: 0</span>
                 <span class="hud-tag" id="hudMotionTag">Motion: 0%</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- 2. SMALLER WINDOW NEXT TO VIDEO: 3D TALKING MOOSE ANIMATION WINDOW -->
-          <div class="viewport-box moose-3d-viewport-box">
-            <div class="viewport-header">
-              <div class="vp-title-group">
-                <span class="vp-icon">🦌</span>
-                <strong>3D Talking Moose Animation</strong>
-              </div>
-              <button type="button" id="reset3dViewBtn" class="btn-micro" title="Reset 3D camera angle">
-                🔄 Reset Angle
-              </button>
-            </div>
-
-            <!-- 3D THREE.JS TALKING MOOSE STAGE (Solenoid jaw + moving eyes + drag to rotate) -->
-            <div class="moose-3d-stage-wrapper">
-              <div id="deer3dContainer" class="moose-3d-canvas" title="Click and drag to rotate Buckley in 3D!">
-                <div class="loading-3d-spinner">Loading 3D Animatronic Moose...</div>
-              </div>
-              <div class="moose-3d-telemetry-overlay">
-                <span>📐 Servos: <strong id="hud3dYawPitch">Yaw: 0.0° | Pitch: 0.0°</strong></span>
-                <span>👄 Jaw Solenoid: <strong id="hud3dJawAngle">[SHUT - OFF]</strong></span>
               </div>
             </div>
           </div>

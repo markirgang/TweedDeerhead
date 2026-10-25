@@ -1,9 +1,18 @@
 import cv2
+import json
 import time
 import threading
 import numpy as np
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
+
+try:
+    import pixy_hid  # Direct HID gimbal control (tracking / idle / privacy)
+    PIXY_HID_AVAILABLE = True
+except Exception as _hid_exc:  # keep the video bridge alive even if HID is missing
+    pixy_hid = None
+    PIXY_HID_AVAILABLE = False
+    print(f"[CameraBridge] HID tracking unavailable: {_hid_exc}", flush=True)
 
 # ============================================================================
 # EMEET PIXY DirectShow Camera Bridge
@@ -251,6 +260,31 @@ class CamHandler(BaseHTTPRequestHandler):
                 age = (time.time() - last_frame_time) if last_frame_time else None
             self._send(200, '{"ok": true, "camIndex": %d, "frames": %d, "age": %s, "verified": %s}'
                        % (current_cam_index, count, ('null' if age is None else round(age, 2)), verified_indices))
+            return
+
+        # ------------------------------------------------------------------
+        # EMEET PIXY hardware gimbal control (HID) - no EMEET app required
+        # ------------------------------------------------------------------
+        if parsed.path.startswith('/pixy/'):
+            action = parsed.path[len('/pixy/'):]
+            if not PIXY_HID_AVAILABLE or pixy_hid is None:
+                self._send(503, '{"ok": false, "error": "HID tracking unavailable (pip install hidapi)"}')
+                return
+
+            if action == 'status':
+                self._send(200, json.dumps(pixy_hid.status()))
+            elif action == 'gesture':
+                result = pixy_hid.enable_gesture(True)
+                self._send(200 if result.get('ok') else 500, json.dumps(result))
+            elif action in ('tracking', 'track', 'idle', 'privacy'):
+                result = pixy_hid.set_mode('tracking' if action in ('tracking', 'track') else action)
+                if result.get('ok'):
+                    print(f"[CameraBridge] Pixy gimbal mode -> {result.get('modeName')}", flush=True)
+                else:
+                    print(f"[CameraBridge] Pixy gimbal control failed: {result.get('error')}", flush=True)
+                self._send(200 if result.get('ok') else 500, json.dumps(result))
+            else:
+                self._send(404, '{"ok": false, "error": "unknown pixy action"}')
             return
 
         if parsed.path == '/frame':
