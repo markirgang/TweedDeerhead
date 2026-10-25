@@ -513,7 +513,7 @@ const server = http.createServer(async (req, res) => {
 
   // Proxy live EMEET PIXY camera frame from Python DirectShow bridge
   if (pathname === '/api/camera/frame' && req.method === 'GET') {
-    const camIdx = parsedUrl.searchParams.get('cam') || '1';
+    const camIdx = parsedUrl.searchParams.get('cam') || '0';
     http.get(`http://127.0.0.1:3122/frame?cam=${encodeURIComponent(camIdx)}`, (camRes) => {
       if (camRes.statusCode !== 200) {
         res.writeHead(503);

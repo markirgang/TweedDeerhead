@@ -318,6 +318,50 @@ body {
   pointer-events: none;
 }
 
+/* Camera connecting / stalled overlay (prevents broken-image "video error" look) */
+.video-placeholder {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 20px;
+  text-align: center;
+  background: radial-gradient(circle at 50% 45%, #14100b 0%, #080604 75%);
+  color: var(--text-muted, #b9a888);
+}
+
+.video-placeholder.hidden {
+  display: none;
+}
+
+.vp-placeholder-text {
+  font-size: 0.95rem;
+  letter-spacing: 0.03em;
+  color: #e8d9b8;
+}
+
+.vp-placeholder-hint {
+  font-size: 0.76rem;
+  opacity: 0.7;
+}
+
+.vp-spinner {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 3px solid rgba(229, 154, 60, 0.22);
+  border-top-color: var(--amber-accent, #e59a3c);
+  animation: vp-spin 0.9s linear infinite;
+}
+
+@keyframes vp-spin {
+  to { transform: rotate(360deg); }
+}
+
 .video-hud-top {
   position: absolute;
   top: 8px;

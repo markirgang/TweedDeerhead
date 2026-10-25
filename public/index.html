@@ -95,7 +95,12 @@
             <!-- VIDEO CONTAINER WITH HUD -->
             <div class="video-viewport" id="videoViewport">
               <video id="webcamVideo" autoplay playsinline muted class="hidden"></video>
-              <img id="pixyBridgeImg" alt="EMEET PIXY Live Feed" crossorigin="anonymous" />
+              <img id="pixyBridgeImg" alt="" crossorigin="anonymous" />
+              <div class="video-placeholder" id="videoPlaceholder">
+                <div class="vp-spinner"></div>
+                <div class="vp-placeholder-text">Connecting to EMEET PIXY camera…</div>
+                <div class="vp-placeholder-hint">If this stays up, click 🔄 Reset Video Feed above.</div>
+              </div>
               <canvas id="hudCanvas"></canvas>
               <div class="video-hud-top">
                 <span class="hud-tag" id="hudFpsTag">EMEET PIXY: ACTIVE</span>
@@ -189,8 +194,8 @@
           <div class="quick-hw-item">
             <label for="quickCameraSelect">📷 Camera:</label>
             <select id="quickCameraSelect" class="hw-select-compact">
-              <option value="1" selected>🎯 EMEET PIXY (Connected Pixy Webcam)</option>
-              <option value="0">📷 EMEET Virtual Camera</option>
+              <option value="0" selected>🎯 EMEET PIXY (Connected Pixy Webcam)</option>
+              <option value="1">📷 EMEET Virtual Camera</option>
             </select>
           </div>
           <div class="quick-hw-item">
@@ -288,8 +293,8 @@
           <div class="form-group">
             <label for="cameraSelect">Select Video Camera:</label>
             <select id="cameraSelect" class="hw-select">
-              <option value="1" selected>🎯 EMEET PIXY (Connected Pixy Webcam)</option>
-              <option value="0">📷 EMEET Virtual Camera</option>
+              <option value="0" selected>🎯 EMEET PIXY (Connected Pixy Webcam)</option>
+              <option value="1">📷 EMEET Virtual Camera</option>
             </select>
           </div>
 

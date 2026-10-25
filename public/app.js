@@ -19,8 +19,9 @@ const VOICE_PRESETS = {
 };
 
 const state = {
-  selectedCamIndex: 1, // Verified EMEET PIXY device index
+  selectedCamIndex: 0, // Physical EMEET PIXY working device index
   bridgeActive: false,
+  lastFrameAt: 0,
   cocoModel: null,
   detections: [],
   motionPercent: 0,
@@ -35,7 +36,7 @@ const state = {
   history: [],
   win11Hardware: null,
   settings: {
-    cameraId: localStorage.getItem('tweed_cameraId') || '1',
+    cameraId: localStorage.getItem('tweed_cameraId') || '0',
     micId: localStorage.getItem('tweed_micId') || 'mic-pixy',
     speakerId: localStorage.getItem('tweed_speakerId') || '',
     voicePreset: localStorage.getItem('tweed_voicePreset') || 'witty-trail',
@@ -119,7 +120,7 @@ function bindElements() {
     'toastBanner',
     'deerStateBadge', 'deerSpeechText', 'lastProviderLabel',
     'activeCameraLabel', 'resetVideoFeedBtn', 'triggerEmeetTrackingBtn', 'autoGreetToggle', 'hudOverlayToggle',
-    'webcamVideo', 'pixyBridgeImg', 'hudCanvas', 'hudFpsTag', 'hudTargetTag', 'hudMotionTag',
+    'webcamVideo', 'pixyBridgeImg', 'videoPlaceholder', 'hudCanvas', 'hudFpsTag', 'hudTargetTag', 'hudMotionTag',
     'reset3dViewBtn',
     'quickCameraSelect', 'quickMicSelect', 'quickVoicePresetSelect',
     'conversationToggleBtn', 'talkBtnHeading', 'talkBtnSubtext',
@@ -192,8 +193,9 @@ function bindElements() {
 
   // Synced Camera Selectors
   function onCameraChange(newVal, sourceSelect) {
+    const previous = state.selectedCamIndex;
     state.settings.cameraId = newVal;
-    state.selectedCamIndex = Number(newVal) || 1;
+    state.selectedCamIndex = Number(newVal) || 0;
     localStorage.setItem('tweed_cameraId', newVal);
     if (els.cameraSelect) els.cameraSelect.value = newVal;
     if (els.quickCameraSelect) els.quickCameraSelect.value = newVal;
@@ -201,6 +203,22 @@ function bindElements() {
     els.activeCameraLabel.textContent = `Active Feed: ${camName}`;
     els.hwPreviewBadge.textContent = `Live Preview: ${camName}`;
     showToast(`📷 Switched Video to ${camName}`);
+
+    // Watchdog: if this device produces no frames in 4s, restore the working camera.
+    const switchedTo = state.selectedCamIndex;
+    const switchedAt = Date.now();
+    setTimeout(() => {
+      if (state.selectedCamIndex !== switchedTo) return;
+      if (state.lastFrameAt && state.lastFrameAt > switchedAt) return; // frames are flowing
+      if (previous === switchedTo) return;
+      state.selectedCamIndex = previous;
+      state.settings.cameraId = String(previous);
+      localStorage.setItem('tweed_cameraId', String(previous));
+      if (els.cameraSelect) els.cameraSelect.value = String(previous);
+      if (els.quickCameraSelect) els.quickCameraSelect.value = String(previous);
+      showToast('⚠️ That camera produced no picture. Reverted to the working EMEET PIXY feed.');
+      resetVideoFeed();
+    }, 4000);
   }
   els.cameraSelect?.addEventListener('change', () => onCameraChange(els.cameraSelect.value, els.cameraSelect));
   els.quickCameraSelect?.addEventListener('change', () => onCameraChange(els.quickCameraSelect.value, els.quickCameraSelect));
@@ -731,11 +749,63 @@ async function resetVideoFeed() {
     els.camStatusBadge.textContent = '🔄 Reconnecting Video...';
     els.camStatusBadge.className = 'status-pill status-warn';
   }
+  state.bridgeActive = false;
+  state.lastFrameAt = 0;
+  if (els.videoPlaceholder) {
+    els.videoPlaceholder.classList.remove('hidden');
+    const txt = els.videoPlaceholder.querySelector('.vp-placeholder-text');
+    const hint = els.videoPlaceholder.querySelector('.vp-placeholder-hint');
+    if (txt) txt.textContent = 'Reconnecting to EMEET PIXY camera…';
+    if (hint) hint.textContent = 'Releasing and reopening the DirectShow video stream.';
+  }
+
   try {
     await fetch('/api/camera/reset', { method: 'POST' });
-    setTimeout(() => {
-      showToast('✅ Video Feed Reset Successful!');
-    }, 1200);
+    // Give the DirectShow bridge a moment to release + reopen the device
+    await new Promise(r => setTimeout(r, 1600));
+
+    // Force an immediate fresh frame request (bypasses any stale/cached image)
+    await new Promise((resolve) => {
+      const probe = new Image();
+      probe.onload = () => {
+        state.lastFrameAt = Date.now();
+        state.bridgeActive = true;
+        if (els.pixyBridgeImg) els.pixyBridgeImg.src = probe.src;
+        if (els.hwCameraPreviewImg) els.hwCameraPreviewImg.src = probe.src;
+        if (els.videoPlaceholder) els.videoPlaceholder.classList.add('hidden');
+        resolve();
+      };
+      probe.onerror = resolve;
+      probe.src = `/api/camera/frame?cam=${state.selectedCamIndex}&reset=1&t=${Date.now()}`;
+    });
+
+    const healthy = Boolean(state.lastFrameAt && Date.now() - state.lastFrameAt < 5000);
+    if (healthy) {
+      showToast('✅ Video feed restored — EMEET PIXY is live again.');
+      if (els.camStatusBadge) {
+        els.camStatusBadge.textContent = '📹 EMEET PIXY: LIVE';
+        els.camStatusBadge.className = 'status-pill status-ok';
+      }
+      if (els.videoPlaceholder) {
+        const txt = els.videoPlaceholder.querySelector('.vp-placeholder-text');
+        const hint = els.videoPlaceholder.querySelector('.vp-placeholder-hint');
+        if (txt) txt.textContent = 'Connecting to EMEET PIXY camera…';
+        if (hint) hint.textContent = 'If this stays up, click 🔄 Reset Video Feed above.';
+      }
+    } else {
+      showToast('⚠️ Still no picture. Check that the PIXY privacy shutter is open and no other app is using the camera.');
+      if (els.camStatusBadge) {
+        els.camStatusBadge.textContent = '⚠️ No Signal';
+        els.camStatusBadge.className = 'status-pill status-warn';
+      }
+      if (els.videoPlaceholder) {
+        els.videoPlaceholder.classList.remove('hidden');
+        const txt = els.videoPlaceholder.querySelector('.vp-placeholder-text');
+        const hint = els.videoPlaceholder.querySelector('.vp-placeholder-hint');
+        if (txt) txt.textContent = 'Still no video signal';
+        if (hint) hint.textContent = 'Open the PIXY privacy shutter, unplug/replug the camera, then press Reset again.';
+      }
+    }
   } catch (err) {
     showToast(`⚠️ Video reset error: ${err.message}`);
   }
@@ -746,6 +816,8 @@ async function resetVideoFeed() {
 // ============================================================================
 function startPixyBridgeLoop() {
   let inFlight = false;
+  let consecutiveErrors = 0;
+  let autoRecoveredAt = 0;
 
   setInterval(() => {
     if (inFlight) return;
@@ -755,8 +827,11 @@ function startPixyBridgeLoop() {
     const tempImg = new Image();
     tempImg.crossOrigin = 'anonymous';
     tempImg.onload = () => {
+      consecutiveErrors = 0;
+      state.lastFrameAt = Date.now();
       if (els.pixyBridgeImg) els.pixyBridgeImg.src = tempImg.src;
       if (els.hwCameraPreviewImg) els.hwCameraPreviewImg.src = tempImg.src;
+      if (els.videoPlaceholder) els.videoPlaceholder.classList.add('hidden');
       if (!state.bridgeActive) {
         state.bridgeActive = true;
         if (els.camStatusBadge) {
@@ -767,7 +842,31 @@ function startPixyBridgeLoop() {
       inFlight = false;
     };
     tempImg.onerror = () => {
+      consecutiveErrors++;
       inFlight = false;
+
+      // Show the "no signal" overlay after ~1.5s without a picture
+      if (consecutiveErrors === 15 && els.videoPlaceholder) {
+        els.videoPlaceholder.classList.remove('hidden');
+        const txt = els.videoPlaceholder.querySelector('.vp-placeholder-text');
+        const hint = els.videoPlaceholder.querySelector('.vp-placeholder-hint');
+        if (txt) txt.textContent = 'No video signal from EMEET PIXY';
+        if (hint) hint.textContent = 'Click 🔄 Reset Video Feed above, or check the camera is plugged in.';
+      }
+
+      // Auto-heal: ~3s of no frames triggers one automatic bridge reset
+      if (consecutiveErrors === 30) {
+        state.bridgeActive = false;
+        if (els.camStatusBadge) {
+          els.camStatusBadge.textContent = '⚠️ Video Stalled';
+          els.camStatusBadge.className = 'status-pill status-warn';
+        }
+      }
+      if (consecutiveErrors >= 45 && Date.now() - autoRecoveredAt > 20000) {
+        autoRecoveredAt = Date.now();
+        consecutiveErrors = 0;
+        resetVideoFeed();
+      }
     };
     tempImg.src = url;
   }, 100);
@@ -1019,14 +1118,33 @@ async function refreshWindows11HardwareList(forceRefresh = false) {
       ? data.cameras
       : [{ FriendlyName: 'EMEET PIXY', InstanceId: '1' }];
 
+    // Put the real hardware PIXY first, then virtual/other cameras
+    cams.sort((a, b) => {
+      const rank = (c) => /pixy/i.test(c.FriendlyName) && !/virtual/i.test(c.FriendlyName) ? 0
+        : /virtual/i.test(c.FriendlyName) ? 2 : 1;
+      return rank(a) - rank(b);
+    });
+
     populateSelectPair(
       els.cameraSelect,
       els.quickCameraSelect,
       cams,
-      (c) => /pixy/i.test(c.FriendlyName) ? `🎯 ${c.FriendlyName} (Connected Pixy Webcam)` : `📷 ${c.FriendlyName}`,
-      (_c, idx) => String(idx === 0 ? 1 : 0),
+      (c) => /pixy/i.test(c.FriendlyName) && !/virtual/i.test(c.FriendlyName)
+        ? `🎯 ${c.FriendlyName} (Connected Pixy Webcam)`
+        : `📷 ${c.FriendlyName}`,
+      // Map to the DirectShow index that actually works: real PIXY = 0, virtual cam = 1
+      (c, idx) => (/pixy/i.test(c.FriendlyName) && !/virtual/i.test(c.FriendlyName))
+        ? '0'
+        : (/virtual/i.test(c.FriendlyName) ? '1' : String(idx)),
       state.settings.cameraId
     );
+    state.selectedCamIndex = 0;
+    if (els.cameraSelect && [...els.cameraSelect.options].some(o => o.value === '0')) {
+      els.cameraSelect.value = '0';
+    }
+    if (els.quickCameraSelect && [...els.quickCameraSelect.options].some(o => o.value === '0')) {
+      els.quickCameraSelect.value = '0';
+    }
 
     // 2. Microphones
     const mics = Array.isArray(data.microphones) && data.microphones.length > 0
