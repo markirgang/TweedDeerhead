@@ -24,14 +24,17 @@ print(f"[CameraBridge] Auto-detected active camera at index: {current_cam_index}
 latest_jpeg = None
 lock = threading.Lock()
 running = True
+needs_reset = False
 
 def capture_loop():
-    global latest_jpeg, current_cam_index
+    global latest_jpeg, current_cam_index, needs_reset
     active_idx = -1
     cap = None
 
     while running:
-        if active_idx != current_cam_index or cap is None or not cap.isOpened():
+        # Reconnect or reset camera
+        if needs_reset or active_idx != current_cam_index or cap is None or not cap.isOpened():
+            needs_reset = False
             if cap is not None:
                 try:
                     cap.release()
@@ -40,7 +43,6 @@ def capture_loop():
             active_idx = current_cam_index
             cap = cv2.VideoCapture(active_idx, cv2.CAP_DSHOW)
             if not cap.isOpened():
-                # Fallback to alternate index
                 alt_idx = 0 if active_idx == 1 else 1
                 cap = cv2.VideoCapture(alt_idx, cv2.CAP_DSHOW)
                 if cap.isOpened():
@@ -60,7 +62,8 @@ def capture_loop():
                         latest_jpeg = buf.tobytes()
                 time.sleep(0.04)
             else:
-                time.sleep(0.15)
+                needs_reset = True
+                time.sleep(0.2)
         else:
             time.sleep(0.3)
 
@@ -69,15 +72,30 @@ class CamHandler(BaseHTTPRequestHandler):
         return
 
     def do_GET(self):
-        global current_cam_index
+        global current_cam_index, needs_reset
         parsed = urlparse(self.path)
+
+        if parsed.path == '/reset':
+            needs_reset = True
+            with lock:
+                latest_jpeg = None
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(b'{"ok": true, "status": "resetting"}')
+            return
+
         if parsed.path == '/frame':
             qs = parse_qs(parsed.query)
+            if 'reset' in qs:
+                needs_reset = True
             if 'cam' in qs:
                 try:
                     idx = int(qs['cam'][0])
                     if idx != current_cam_index and idx in [0, 1, 2]:
                         current_cam_index = idx
+                        needs_reset = True
                 except Exception:
                     pass
             with lock:

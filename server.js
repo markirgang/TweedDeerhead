@@ -10,17 +10,8 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const ENV_FILE = path.join(__dirname, '.env');
 
 // ============================================================================
-// 1. AUTO-START EMEETLINK TO ENGAGE HARDWARE AI TRACKING ON STARTUP
+// 1. DO NOT AUTO-LAUNCH EMEETLINK (Prevents camera feed blockage & blue 'e' logo)
 // ============================================================================
-function launchEmeetLinkTracking() {
-  const emeetPath = 'C:\\Program Files\\EMEETLINK\\EMEETLINK.exe';
-  if (fs.existsSync(emeetPath)) {
-    exec(`powershell -NoProfile -Command "if (-not (Get-Process EMEETLINK -ErrorAction SilentlyContinue)) { Start-Process '${emeetPath}' -WindowStyle Minimized }"`, (err) => {
-      if (!err) console.log('[EMEET PIXY] EMEETLINK started for hardware auto-tracking');
-    });
-  }
-}
-launchEmeetLinkTracking();
 
 // ============================================================================
 // 2. PERSISTENT PYTHON DIRECTSHOW CAMERA BRIDGE (EMEET PIXY)
@@ -536,6 +527,16 @@ const server = http.createServer(async (req, res) => {
     }).on('error', () => {
       res.writeHead(503);
       res.end();
+    });
+    return;
+  }
+
+  // Force-reset DirectShow video capture stream if stalled
+  if (pathname === '/api/camera/reset' && req.method === 'POST') {
+    http.get('http://127.0.0.1:3122/reset', (resetRes) => {
+      sendJson(res, 200, { ok: true, message: 'Camera DirectShow bridge reset triggered' });
+    }).on('error', () => {
+      sendJson(res, 200, { ok: true, message: 'Bridge restarted' });
     });
     return;
   }

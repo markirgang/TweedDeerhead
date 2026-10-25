@@ -118,7 +118,7 @@ function bindElements() {
     'quickKeyBanner', 'quickGeminiKeyInput', 'quickSaveKeyBtn',
     'toastBanner',
     'deerStateBadge', 'deerSpeechText', 'lastProviderLabel',
-    'activeCameraLabel', 'triggerEmeetTrackingBtn', 'autoGreetToggle', 'hudOverlayToggle',
+    'activeCameraLabel', 'resetVideoFeedBtn', 'triggerEmeetTrackingBtn', 'autoGreetToggle', 'hudOverlayToggle',
     'webcamVideo', 'pixyBridgeImg', 'hudCanvas', 'hudFpsTag', 'hudTargetTag', 'hudMotionTag',
     'reset3dViewBtn',
     'quickCameraSelect', 'quickMicSelect', 'quickVoicePresetSelect',
@@ -152,10 +152,12 @@ function bindElements() {
     showToast('🔄 3D Moose View Angle Reset.');
   });
 
+  // RESET VIDEO FEED BUTTON (Reconnects and resets DirectShow capture immediately)
+  els.resetVideoFeedBtn?.addEventListener('click', () => resetVideoFeed());
+
   // EMEET Hardware Tracking Trigger
   els.triggerEmeetTrackingBtn?.addEventListener('click', () => {
-    fetch('/api/camera/frame?cam=1').catch(() => {});
-    showToast('🎯 EMEET PIXY tracking active! Hold up your open palm ✋ to the camera for 2s to toggle physical motorized tracking.');
+    showToast('🎯 Hardware tracking hint: Hold an open palm ✋ in front of the camera lens for 2s to toggle motorized tracking.');
   });
 
   // CONTINUOUS TALK BUTTON TOGGLE (STAYS ON FOR ENTIRE SESSION!)
@@ -717,6 +719,25 @@ function stopBinarySolenoidJawClapper() {
   }
   if (els.deerStateBadge) {
     els.deerStateBadge.textContent = state.continuousConversationActive ? '👂 Ears Perked (Listening...)' : '👀 Tracking Room';
+  }
+}
+
+// ============================================================================
+// RESET VIDEO FEED FUNCTION (Restarts DirectShow capture stream if frozen)
+// ============================================================================
+async function resetVideoFeed() {
+  showToast('🔄 Resetting EMEET PIXY Video Feed...');
+  if (els.camStatusBadge) {
+    els.camStatusBadge.textContent = '🔄 Reconnecting Video...';
+    els.camStatusBadge.className = 'status-pill status-warn';
+  }
+  try {
+    await fetch('/api/camera/reset', { method: 'POST' });
+    setTimeout(() => {
+      showToast('✅ Video Feed Reset Successful!');
+    }, 1200);
+  } catch (err) {
+    showToast(`⚠️ Video reset error: ${err.message}`);
   }
 }
 

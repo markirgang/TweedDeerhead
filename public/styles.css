@@ -812,6 +812,16 @@ body {
   color: #fff;
 }
 
+.btn-amber-micro {
+  background: linear-gradient(135deg, #b86b14 0%, #8a4805 100%);
+  color: #ffffff;
+  border-color: #e59a3c;
+}
+
+.btn-amber-micro:hover {
+  filter: brightness(1.2);
+}
+
 .vision-toggles {
   display: flex;
   gap: 0.5rem;
