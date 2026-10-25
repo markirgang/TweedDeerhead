@@ -88,7 +88,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 2. Scan hardware on startup & verify Gemini
   await Promise.all([
     refreshWindows11HardwareList(false),
-    checkBackendGeminiStatus()
+    checkBackendGeminiStatus(),
+    loadVoiceBank()
   ]);
 
   // 3. Start Live Video & AI vision loop
@@ -236,9 +237,14 @@ function bindElements() {
   els.micSelect?.addEventListener('change', () => onMicChange(els.micSelect.value, els.micSelect));
   els.quickMicSelect?.addEventListener('change', () => onMicChange(els.quickMicSelect.value, els.quickMicSelect));
 
-  // Quick Voice Preset Selector
+  // Quick Voice Selector (character presets + international voice bank)
   els.quickVoicePresetSelect?.addEventListener('change', () => {
-    applyVoicePreset(els.quickVoicePresetSelect.value);
+    const val = els.quickVoicePresetSelect.value;
+    if (val.startsWith('preset-')) {
+      applyVoicePreset(val.replace('preset-', ''));
+    } else {
+      applySelectedVoice(val);
+    }
   });
 
   // Voice Select in Hardware tab
@@ -247,9 +253,7 @@ function bindElements() {
     if (val.startsWith('preset-')) {
       applyVoicePreset(val.replace('preset-', ''));
     } else {
-      state.settings.voiceURI = val;
-      localStorage.setItem('tweed_voiceURI', val);
-      showToast(`🗣️ Selected Voice: ${val}`);
+      applySelectedVoice(val);
     }
   });
 
@@ -354,6 +358,122 @@ function applyVoicePreset(presetKey) {
   if (els.rateVal) els.rateVal.textContent = p.rate.toFixed(2);
 
   showToast(`🗣️ Voice preset: ${p.label}`);
+}
+
+// ============================================================================
+// INTERNATIONAL VOICE BANK (British / Australian / Indian / Scottish / Irish…)
+// Windows only ships two US voices, so these come from the voice daemon.
+// ============================================================================
+const COUNTRY_FLAGS = {
+  'British': '🇬🇧', 'Australian': '🇦🇺', 'Indian': '🇮🇳', 'Irish': '🇮🇪',
+  'Scottish': '🏴', 'New Zealand': '🇳🇿', 'South African': '🇿🇦', 'Canadian': '🇨🇦',
+  'Singaporean': '🇸🇬', 'Kenyan': '🇰🇪', 'Tanzanian': '🇹🇿', 'Filipino': '🇵🇭',
+  'American': '🇺🇸', 'Spanish (Spain)': '🇪🇸', 'Mexican Spanish': '🇲🇽',
+  'French': '🇫🇷', 'French (Canada)': '🇨🇦', 'German': '🇩🇪', 'Italian': '🇮🇹',
+  'Brazilian Portuguese': '🇧🇷', 'Portuguese': '🇵🇹', 'Dutch': '🇳🇱', 'Swedish': '🇸🇪',
+  'Polish': '🇵🇱', 'Russian': '🇷🇺', 'Turkish': '🇹🇷', 'Hindi': '🇮🇳',
+  'Japanese': '🇯🇵', 'Korean': '🇰🇷', 'Mandarin Chinese': '🇨🇳', 'Arabic (Egypt)': '🇪🇬',
+  'Hebrew': '🇮🇱', 'Greek': '🇬🇷', 'Czech': '🇨🇿', 'Danish': '🇩🇰', 'Finnish': '🇫🇮',
+  'Norwegian': '🇳🇴', 'Hungarian': '🇭🇺', 'Romanian': '🇷🇴', 'Ukrainian': '🇺🇦',
+  'Vietnamese': '🇻🇳', 'Thai': '🇹🇭', 'Indonesian': '🇮🇩', 'Malay': '🇲🇾',
+  'Tamil': '🇮🇳', 'Telugu': '🇮🇳', 'Bengali': '🇧🇩', 'Gujarati': '🇮🇳',
+  'Kannada': '🇮🇳', 'Malayalam': '🇮🇳', 'Marathi': '🇮🇳', 'Persian': '🇮🇷', 'Urdu': '🇵🇰'
+};
+
+let VOICE_BANK = [];
+let voiceBankLoaded = false;
+
+function voiceOptionLabel(v) {
+  const flag = COUNTRY_FLAGS[v.country] || '🌐';
+  const gender = v.gender === 'Female' ? 'Female' : 'Male';
+  return `${flag} ${v.country} — ${v.name} (${gender})`;
+}
+
+async function loadVoiceBank() {
+  try {
+    const res = await fetch('/api/voices', { cache: 'no-store' });
+    const data = await res.json();
+    VOICE_BANK = Array.isArray(data.voices) ? data.voices : [];
+    voiceBankLoaded = true;
+    if (!VOICE_BANK.length) {
+      console.warn('[Voices] Voice bank is empty — is the voice daemon running?');
+    }
+  } catch (err) {
+    console.warn('[Voices] Could not load voice bank:', err.message);
+  }
+  populateVoiceBankSelects();
+}
+
+function populateVoiceBankSelects() {
+  if (!VOICE_BANK.length) return;
+
+  const groups = [
+    { key: 'English Voices', label: '🌍 International English Voices (Male & Female)' },
+    { key: 'World Voices', label: '🌏 World Languages (Male & Female)' }
+  ];
+
+  const targets = [els.voiceSelect, els.quickVoicePresetSelect].filter(Boolean);
+
+  targets.forEach((select) => {
+    // Drop any previously built voice-bank groups so reloads never duplicate
+    Array.from(select.querySelectorAll('optgroup.voice-bank-group'))
+      .forEach(group => group.remove());
+
+    groups.forEach(({ key, label }) => {
+      const voices = VOICE_BANK.filter(v => v.group === key);
+      if (!voices.length) return;
+
+      const group = document.createElement('optgroup');
+      group.className = 'voice-bank-group';
+      group.label = label;
+
+      voices.forEach((v) => {
+        const opt = document.createElement('option');
+        opt.value = v.id;
+        opt.textContent = voiceOptionLabel(v);
+        group.appendChild(opt);
+      });
+
+      select.appendChild(group);
+    });
+  });
+
+  restoreSelectedVoice();
+}
+
+function restoreSelectedVoice() {
+  const current = state.settings.voiceURI;
+  if (!current) return;
+
+  if (els.voiceSelect) els.voiceSelect.value = current;
+  if (els.quickVoicePresetSelect) {
+    if (state.settings.voicePreset) {
+      els.quickVoicePresetSelect.value = state.settings.voicePreset;
+    } else {
+      els.quickVoicePresetSelect.value = current;
+    }
+  }
+}
+
+// Applies either a voice-bank id (edge:/piper:) or a Windows SAPI voice name.
+function applySelectedVoice(voiceId) {
+  if (!voiceId) return;
+
+  state.settings.voiceURI = voiceId;
+  state.settings.voicePreset = '';
+  localStorage.setItem('tweed_voiceURI', voiceId);
+  localStorage.setItem('tweed_voicePreset', '');
+
+  const neural = VOICE_BANK.find(v => v.id === voiceId);
+  if (neural) {
+    const gender = neural.gender === 'Female' ? '♀' : '♂';
+    showToast(`${COUNTRY_FLAGS[neural.country] || '🌐'} ${neural.country} ${gender} ${neural.name}`);
+  } else {
+    showToast(`🗣️ Selected Voice: ${voiceId}`);
+  }
+
+  if (els.voiceSelect) els.voiceSelect.value = voiceId;
+  if (els.quickVoicePresetSelect) els.quickVoicePresetSelect.value = voiceId;
 }
 
 function initTabs() {
@@ -602,6 +722,7 @@ async function triggerDeerVisionResponse(promptText) {
         apiKey: state.settings.geminiApiKey,
         voiceName: state.settings.voiceURI,
         rate: state.settings.rate,
+        pitch: state.settings.pitch,
         volume: state.settings.volume,
         customPersona: state.settings.persona,
         userMessage: promptText,
@@ -700,6 +821,7 @@ async function speakAsDeerhead(text) {
         text,
         voiceName: state.settings.voiceURI,
         rate: state.settings.rate,
+        pitch: state.settings.pitch,
         volume: state.settings.volume
       })
     });

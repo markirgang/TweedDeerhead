@@ -129,9 +129,66 @@ function createSpeechDaemon(name) {
 
 const ttsDaemon = createSpeechDaemon('TTS-Daemon');
 
+// ============================================================================
+// 5. PERSISTENT PYTHON INTERNATIONAL VOICE BANK (BRITISH / AUSSIE / INDIAN / ...)
+//    Windows only ships two US voices, so this daemon serves a large catalog of
+//    male + female neural voices from many countries, plus a local Scottish one.
+// ============================================================================
+const VOICE_DAEMON = 'http://127.0.0.1:3124';
+let voiceDaemonProc = null;
+function startVoiceDaemon() {
+  const scriptPath = path.join(__dirname, 'voice_daemon.py');
+  if (!fs.existsSync(scriptPath)) return;
+  voiceDaemonProc = spawn('python', [scriptPath], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true
+  });
+  voiceDaemonProc.stdout.on('data', d => console.log('[VoiceBank]', d.toString().trim()));
+  voiceDaemonProc.stderr.on('data', d => {
+    const line = d.toString().trim();
+    if (line) console.log('[VoiceBank]', line);
+  });
+  voiceDaemonProc.on('exit', () => {
+    setTimeout(startVoiceDaemon, 3000);
+  });
+}
+startVoiceDaemon();
+
+let voiceCatalog = { voices: [], ready: false };
+let voiceCatalogAt = 0;
+
+async function fetchVoiceCatalog(force = false) {
+  if (!force && voiceCatalog.ready && Date.now() - voiceCatalogAt < 60000) {
+    return voiceCatalog;
+  }
+  try {
+    const ctrl = new AbortController();
+    const guard = setTimeout(() => ctrl.abort(), 4000);
+    const res = await fetch(`${VOICE_DAEMON}/voices`, { signal: ctrl.signal });
+    clearTimeout(guard);
+    if (!res.ok) throw new Error(`voice daemon ${res.status}`);
+    const data = await res.json();
+    voiceCatalog = {
+      voices: Array.isArray(data.voices) ? data.voices : [],
+      ready: true,
+      edge: Boolean(data.edge),
+      piper: Boolean(data.piper),
+      piperLoaded: Boolean(data.piperLoaded)
+    };
+    voiceCatalogAt = Date.now();
+  } catch {
+    if (!voiceCatalog.ready) {
+      voiceCatalog = { voices: [], ready: false };
+    }
+  }
+  return voiceCatalog;
+}
+
+
 process.on('exit', () => {
   if (camBridgeProc) { try { camBridgeProc.kill(); } catch {} }
   if (micDaemonProc) { try { micDaemonProc.kill(); } catch {} }
+  if (voiceDaemonProc) { try { voiceDaemonProc.kill(); } catch {} }
   ttsDaemon.kill();
 });
 
@@ -364,6 +421,57 @@ async function synthesizeWindowsSpeech({ text, voiceName, rate = 1.05, volume = 
     return res.audioDataUrl;
   }
   throw new Error(res?.error || 'TTS failed');
+}
+
+// International neural voice (British / Australian / Indian / Scottish / Irish ...)
+async function synthesizeNeuralVoice({ text, voiceId, rate = 1.05, pitch = 0.88 }) {
+  const ctrl = new AbortController();
+  const guard = setTimeout(() => ctrl.abort(), 25000);
+  try {
+    const res = await fetch(`${VOICE_DAEMON}/say`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: String(text || ''),
+        voiceId: String(voiceId || ''),
+        rate: Number(rate) || 1.0,
+        pitch: Number(pitch) || 1.0
+      }),
+      signal: ctrl.signal
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok || !data.audioDataUrl) {
+      throw new Error(data?.error || `voice daemon ${res.status}`);
+    }
+    return data.audioDataUrl;
+  } finally {
+    clearTimeout(guard);
+  }
+}
+
+function isNeuralVoiceId(voiceName) {
+  const id = String(voiceName || '');
+  return id.startsWith('edge:') || id.startsWith('piper:');
+}
+
+// Single entry point used by every speech path: try the chosen international
+// voice first, and fall back to the local Windows voice if it is unreachable.
+async function synthesizeSpeech({ text, voiceName, rate = 1.05, pitch = 0.88, volume = 100 }) {
+  if (isNeuralVoiceId(voiceName)) {
+    try {
+      return await synthesizeNeuralVoice({ text, voiceId: voiceName, rate, pitch });
+    } catch (err) {
+      console.warn(`[VoiceBank] ${voiceName} failed (${err.message}) — using the Windows voice instead`);
+    }
+  }
+  return synthesizeWindowsSpeech({ text, voiceName: normalizeSapiVoice(voiceName), rate, volume });
+}
+
+// A neural id can never be handed to SAPI; map it back to a real installed voice.
+function normalizeSapiVoice(voiceName) {
+  const id = String(voiceName || '');
+  if (!id || isNeuralVoiceId(id)) return 'Microsoft David Desktop';
+  return id;
 }
 
 // Verify Google Gemini API Key and fetch available Gemini Vision models
@@ -684,10 +792,24 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, hw);
   }
 
+  if (pathname === '/api/voices' && req.method === 'GET') {
+    const force = parsedUrl.searchParams.get('refresh') === '1';
+    const catalog = await fetchVoiceCatalog(force);
+    return sendJson(res, 200, {
+      ok: true,
+      ready: catalog.ready,
+      count: catalog.voices.length,
+      edge: Boolean(catalog.edge),
+      piper: Boolean(catalog.piper),
+      piperLoaded: Boolean(catalog.piperLoaded),
+      voices: catalog.voices
+    });
+  }
+
   if (pathname === '/api/tts' && req.method === 'POST') {
     try {
       const body = await parseBody(req);
-      const audioDataUrl = await synthesizeWindowsSpeech(body);
+      const audioDataUrl = await synthesizeSpeech(body);
       return sendJson(res, 200, { ok: true, audioDataUrl });
     } catch (err) {
       return sendJson(res, 500, { ok: false, error: err.message });
@@ -782,10 +904,11 @@ const server = http.createServer(async (req, res) => {
       // Pre-synthesize WAV audio in the same round-trip for minimum conversational delay!
       let audioDataUrl = null;
       try {
-        audioDataUrl = await synthesizeWindowsSpeech({
+        audioDataUrl = await synthesizeSpeech({
           text: reply,
           voiceName: body.voiceName || 'Microsoft David Desktop',
           rate: body.rate || 1.05,
+          pitch: body.pitch || 0.88,
           volume: body.volume ?? 100
         });
       } catch {}
@@ -825,6 +948,7 @@ server.listen(PORT, () => {
   console.log(`📍 Wall Location: 121 Tweed Blvd, Nyack, NY 10960`);
   console.log(`📹 EMEET PIXY DirectShow Bridge: Port 3122`);
   console.log(`🎙️ EMEET PIXY Mic & Real-time VU Daemon: Port 3123`);
+  console.log(`🗣️ International Voice Bank (123 voices, 50 countries): Port 3124`);
   console.log(`👄 Solenoid Jaw: Binary ON/OFF Action`);
   console.log(`🌐 Open in Browser: http://localhost:${PORT}`);
   console.log(`🦌 ============================================================\n`);

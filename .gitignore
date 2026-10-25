@@ -7,3 +7,7 @@ __pycache__/
 
 test_*.jpg
 *_snapshot.jpg
+
+# Local Scottish (Piper) voice model - 63 MB, downloaded on first use
+voices/*.onnx
+voices/*.onnx.json
