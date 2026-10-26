@@ -745,12 +745,16 @@ const browserMic = {
 
 let networkInfo = null;
 
+// The wall PC is the only machine that owns the PIXY camera and its reset.
+function isWallPc() {
+  const host = location.hostname;
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '';
+}
+
 // On the wall PC the PIXY microphone hears the room. Anywhere else, the
 // visitor's own computer should use its own mic.
 function defaultMicSource() {
-  const host = location.hostname;
-  const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '';
-  if (!isLocalHost && window.isSecureContext) return MIC_SOURCE_BROWSER;
+  if (!isWallPc() && window.isSecureContext) return MIC_SOURCE_BROWSER;
   return MIC_SOURCE_SERVER;
 }
 
@@ -2053,6 +2057,12 @@ function startPixyBridgeLoop() {
   if (pixyLoop.watchdog) clearInterval(pixyLoop.watchdog);
   pixyLoop.watchdog = setInterval(() => {
     if (!pixyLoop.running) return;
+    // Background tabs have their timers frozen by the browser. That is not a
+    // dead camera — don't reconnect (or reset the shared device) over it.
+    if (document.hidden) {
+      pixyLoop.lastOkAt = Date.now();
+      return;
+    }
     const reference = pixyLoop.lastOkAt || pixyLoop.startedAt;
     if (Date.now() - reference < 8000) return;
     if (Date.now() - pixyLoop.lastAutoResetAt < 15000) return;
@@ -2072,23 +2082,29 @@ async function resetVideoFeed(isAutomatic = false) {
   const resetStartedAt = Date.now();
   pixyLoop.lastAutoResetAt = resetStartedAt;
   showToast(isAutomatic
-    ? '🔄 Video stalled — reconnecting EMEET PIXY automatically...'
-    : '🔄 Resetting EMEET PIXY Video Feed...');
+    ? '🔄 Video stalled — reconnecting to the EMEET PIXY...'
+    : '🔄 Reconnecting to the EMEET PIXY video feed...');
   setVideoBadge('🔄 Reconnecting Video...', 'status-warn');
   state.bridgeActive = false;
   state.lastFrameAt = 0;
   setVideoPlaceholder(
     'Reconnecting to EMEET PIXY camera…',
-    'Releasing and reopening the DirectShow video stream.',
+    isWallPc()
+      ? 'Releasing and reopening the DirectShow video stream.'
+      : 'Retrying this page\u2019s stream — the camera itself stays with the wall PC.',
     true
   );
 
-  // Kick the backend first, then guarantee a fresh polling loop (clears any
-  // request that was left hanging by an earlier server restart).
-  try {
-    await fetch('/api/camera/reset', { method: 'POST', cache: 'no-store' });
-  } catch (err) {
-    console.warn('[Video] Reset request failed:', err);
+  // Kick the backend only from the wall PC: the camera is shared, so a visitor
+  // pressing reset (or a backgrounded tab's watchdog) must not reopen the
+  // DirectShow device while Buckley is using it. Visitors just rebuild their
+  // own polling loop.
+  if (isWallPc()) {
+    try {
+      await fetch('/api/camera/reset', { method: 'POST', cache: 'no-store' });
+    } catch (err) {
+      console.warn('[Video] Reset request failed:', err);
+    }
   }
 
   restartPixyBridgeLoop();

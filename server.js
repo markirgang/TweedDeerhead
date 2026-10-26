@@ -249,6 +249,13 @@ function sendJson(res, status, data) {
 // localhost or https. A self-signed certificate for this machine's names and
 // LAN addresses is generated once and reused.
 // ============================================================================
+// True when the request came from this machine (localhost or its own LAN IP).
+function isLoopback(req) {
+  const raw = (req.socket && req.socket.remoteAddress) || '';
+  const address = raw.replace(/^::ffff:/, '');
+  return address === '127.0.0.1' || address === '::1' || address === 'localhost';
+}
+
 function lanAddresses() {
   const found = [];
   const interfaces = os.networkInterfaces();
@@ -805,6 +812,14 @@ const requestHandler = async (req, res) => {
 
   // Force-reset DirectShow video capture stream if stalled
   if (pathname === '/api/camera/reset' && req.method === 'POST') {
+    // The camera has exactly one owner: the wall PC. A visitor's backgrounded
+    // tab must never reopen the DirectShow stream while Buckley is using it.
+    if (!isLoopback(req)) {
+      return sendJson(res, 403, {
+        ok: false,
+        error: 'The camera can only be reset from the wall PC (localhost).'
+      });
+    }
     http.get('http://127.0.0.1:3122/reset', (resetRes) => {
       resetRes.resume();
       sendJson(res, 200, { ok: true, message: 'Camera DirectShow bridge reset triggered' });
