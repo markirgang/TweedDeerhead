@@ -1,13 +1,22 @@
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const readline = require('readline');
-const { exec, spawn } = require('child_process');
+const { exec, execFile, spawn } = require('child_process');
 
 const PORT = process.env.PORT || 3121;
+// Visitors on other computers need HTTPS: browsers only allow microphone
+// capture on secure origins (https, or localhost).
+const HTTPS_PORT = Number(process.env.HTTPS_PORT || 3443);
+const CERT_DIR = path.join(__dirname, 'certs');
+const CERT_PFX = path.join(CERT_DIR, 'tweed-deerhead.pfx');
+const CERT_PASS = path.join(CERT_DIR, 'cert-password.txt');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const ENV_FILE = path.join(__dirname, '.env');
+
+let httpsReady = false;
 
 // Last known mic VU reading, served instantly if the mic daemon is busy
 let lastMicLevel = { level: 0, device: null };
@@ -232,6 +241,104 @@ function sendJson(res, status, data) {
     'Cache-Control': 'no-store'
   });
   res.end(JSON.stringify(data));
+}
+
+// ============================================================================
+// LOCAL NETWORK + HTTPS, so visitors on other computers can use their own mic
+// Browsers only allow microphone capture on a secure origin, which means
+// localhost or https. A self-signed certificate for this machine's names and
+// LAN addresses is generated once and reused.
+// ============================================================================
+function lanAddresses() {
+  const found = [];
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const info of interfaces[name] || []) {
+      if (info.family === 'IPv4' && !info.internal && !info.address.startsWith('169.254.')) {
+        found.push({ address: info.address, interface: name });
+      }
+    }
+  }
+  return found;
+}
+
+function networkInfo(req) {
+  const addresses = lanAddresses();
+  return {
+    ok: true,
+    hostname: os.hostname(),
+    httpPort: Number(PORT),
+    httpsPort: HTTPS_PORT,
+    httpsReady,
+    secure: Boolean(req.socket && req.socket.encrypted),
+    origin: `${req.socket && req.socket.encrypted ? 'https' : 'http'}://${req.headers.host || 'localhost'}`,
+    addresses: addresses.map(item => ({
+      address: item.address,
+      interface: item.interface,
+      httpUrl: `http://${item.address}:${PORT}`,
+      httpsUrl: `https://${item.address}:${HTTPS_PORT}`
+    }))
+  };
+}
+
+function readCertOptions() {
+  if (!fs.existsSync(CERT_PFX) || !fs.existsSync(CERT_PASS)) return null;
+  return {
+    pfx: fs.readFileSync(CERT_PFX),
+    passphrase: fs.readFileSync(CERT_PASS, 'utf8').trim(),
+    minVersion: 'TLSv1.2'
+  };
+}
+
+function generateCert() {
+  return new Promise((resolve, reject) => {
+    const scriptPath = path.join(__dirname, 'make_cert.ps1');
+    if (!fs.existsSync(scriptPath)) {
+      return reject(new Error('make_cert.ps1 is missing'));
+    }
+    console.log('[HTTPS] Creating a self-signed certificate for this PC...');
+    execFile(
+      'powershell',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, '-OutDir', CERT_DIR],
+      { timeout: 60000, windowsHide: true },
+      (err, stdout, stderr) => {
+        if (err) {
+          const detail = (stderr || stdout || err.message || '').toString().trim();
+          return reject(new Error(detail || 'certificate creation failed'));
+        }
+        resolve();
+      }
+    );
+  });
+}
+
+async function startHttpsServer(handler) {
+  try {
+    if (!readCertOptions()) {
+      await generateCert();
+    }
+    const options = readCertOptions();
+    if (!options) throw new Error('certificate files were not created');
+
+    const httpsServer = https.createServer(options, handler);
+    await new Promise((resolve, reject) => {
+      httpsServer.once('error', reject);
+      httpsServer.listen(HTTPS_PORT, () => {
+        httpsServer.removeListener('error', reject);
+        resolve();
+      });
+    });
+
+    httpsReady = true;
+    const urls = lanAddresses().map(item => `https://${item.address}:${HTTPS_PORT}`);
+    console.log(`[HTTPS] Microphone-enabled secure server on port ${HTTPS_PORT}`);
+    urls.forEach(url => console.log(`[HTTPS]   ${url}`));
+  } catch (err) {
+    httpsReady = false;
+    console.warn(`[HTTPS] Secure server unavailable: ${err.message}`);
+    console.warn('[HTTPS] Visitors on other computers can still watch and read, but their');
+    console.warn('[HTTPS] own microphone needs https. Re-run: powershell -File make_cert.ps1 -OutDir certs');
+  }
 }
 
 function parseBody(req) {
@@ -659,9 +766,15 @@ const MIME_TYPES = {
   '.ico': 'image/x-icon'
 };
 
-const server = http.createServer(async (req, res) => {
+const requestHandler = async (req, res) => {
   const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const pathname = parsedUrl.pathname;
+
+  // Where this app can be reached on the home network, and whether the secure
+  // (microphone-capable) port is up.
+  if (pathname === '/api/net/info' && req.method === 'GET') {
+    return sendJson(res, 200, networkInfo(req));
+  }
 
   // Proxy live EMEET PIXY camera frame from Python DirectShow bridge
   if (pathname === '/api/camera/frame' && req.method === 'GET') {
@@ -783,6 +896,52 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 500, { ok: false, error: err.message });
     });
     req.pipe(micReq);
+    return;
+  }
+
+  // Audio recorded in a visitor's own browser (WAV) -> speech-to-text daemon
+  if (pathname === '/api/mic/transcribe' && req.method === 'POST') {
+    const MAX_AUDIO_BYTES = 12 * 1024 * 1024;
+    const declared = Number(req.headers['content-length'] || 0);
+    if (declared > MAX_AUDIO_BYTES) {
+      return sendJson(res, 413, { ok: false, transcript: '', error: 'Audio clip too large' });
+    }
+
+    let finished = false;
+    const finish = (payload, status = 200) => {
+      if (finished) return;
+      finished = true;
+      sendJson(res, status, payload);
+    };
+
+    const headers = { 'Content-Type': req.headers['content-type'] || 'audio/wav' };
+    if (declared > 0) headers['Content-Length'] = String(declared);
+
+    const sttReq = http.request(
+      { host: '127.0.0.1', port: 3123, path: '/transcribe', method: 'POST', headers, timeout: 30000 },
+      (sttRes) => {
+        let body = '';
+        sttRes.on('data', (chunk) => { body += chunk; });
+        sttRes.on('end', () => {
+          try {
+            const parsed = JSON.parse(body);
+            finish(parsed, sttRes.statusCode || 200);
+          } catch {
+            finish({ ok: false, transcript: '', error: 'Speech engine returned an unreadable answer' }, 502);
+          }
+        });
+      }
+    );
+
+    sttReq.on('timeout', () => {
+      sttReq.destroy();
+      finish({ ok: false, transcript: '', error: 'Speech recognition timed out' }, 504);
+    });
+    sttReq.on('error', (err) => {
+      finish({ ok: false, transcript: '', error: err.message }, 502);
+    });
+
+    req.pipe(sttReq);
     return;
   }
 
@@ -940,7 +1099,9 @@ const server = http.createServer(async (req, res) => {
     });
     fs.createReadStream(filePath).pipe(res);
   });
-});
+};
+
+const server = http.createServer(requestHandler);
 
 server.listen(PORT, () => {
   console.log(`\n🦌 ============================================================`);
@@ -951,12 +1112,25 @@ server.listen(PORT, () => {
   console.log(`🗣️ International Voice Bank (123 voices, 50 countries): Port 3124`);
   console.log(`👄 Solenoid Jaw: Binary ON/OFF Action`);
   console.log(`🌐 Open in Browser: http://localhost:${PORT}`);
+
+  const nets = lanAddresses();
+  if (nets.length) {
+    console.log(`💻 Other computers on this network can open:`);
+    nets.forEach(item => {
+      console.log(`     http://${item.address}:${PORT}   (watch + read, mic needs https)`);
+      console.log(`     https://${item.address}:${HTTPS_PORT}   (use this computer's microphone)`);
+    });
+  }
   console.log(`🦌 ============================================================\n`);
 
   // Turn on the PIXY's built-in AI tracking automatically (via vendor HID,
   // so the EMEET app never has to run and never grabs the camera).
   enablePixyTrackingOnStartup();
 });
+
+// Secure twin of the app, so a laptop or phone on the same network can talk to
+// Buckley through its own microphone.
+startHttpsServer(requestHandler);
 
 async function enablePixyTrackingOnStartup(attempt = 1) {
   if (process.env.PIXY_AUTO_TRACK === '0') {

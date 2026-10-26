@@ -11,3 +11,7 @@ test_*.jpg
 # Local Scottish (Piper) voice model - 63 MB, downloaded on first use
 voices/*.onnx
 voices/*.onnx.json
+
+# Generated local HTTPS certificate + its password (never commit a private key)
+certs/
+

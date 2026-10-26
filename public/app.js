@@ -40,6 +40,7 @@ const state = {
   settings: {
     cameraId: localStorage.getItem('tweed_cameraId') || '0',
     micId: localStorage.getItem('tweed_micId') || 'mic-pixy',
+    micSource: localStorage.getItem('tweed_micSource') || '',
     speakerId: localStorage.getItem('tweed_speakerId') || '',
     voicePreset: localStorage.getItem('tweed_voicePreset') || 'witty-trail',
     voiceURI: localStorage.getItem('tweed_voiceURI') || 'Microsoft David Desktop',
@@ -83,14 +84,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   appendChatMessage(
     'deer',
-    "Well hooves and antlers! I'm Buckley, mounted on the wall at 121 Tweed Blvd, Nyack, NY 10960. Continuous listening is engaged—speak anytime into your EMEET PIXY mic and I'll answer immediately!"
+    "Well hooves and antlers! I'm Buckley, mounted on the wall at 121 Tweed Blvd, Nyack, NY 10960. Continuous listening is engaged—speak anytime and I'll answer immediately!"
   );
 
   // 2. Scan hardware on startup & verify Gemini
   await Promise.all([
     refreshWindows11HardwareList(false),
     checkBackendGeminiStatus(),
-    loadVoiceBank()
+    loadVoiceBank(),
+    initMicSourceUI()
   ]);
 
   // 3. Start Live Video & AI vision loop
@@ -138,6 +140,8 @@ function bindElements() {
     'refreshDevicesBtn', 'cameraSelect', 'resolutionSelect', 'mirrorVideoToggle',
     'motionSensitivityRange', 'motionSensVal', 'hwCameraPreviewImg', 'hwPreviewBadge',
     'micSelect', 'micLevelBar', 'micStatusText', 'testMicBtn',
+    'micSourceSelect', 'micSourceSelectHw', 'micSourceHint', 'micHttpsBanner', 'micHttpsLink',
+    'vuTitleText',
     'speakerSelect', 'voiceSelect', 'hwSystemVoicesGroup',
     'voicePitchRange', 'pitchVal', 'voiceRateRange', 'rateVal',
     'speakerVolumeRange', 'volVal', 'testSpeakerBtn',
@@ -594,15 +598,21 @@ async function runContinuousListeningLoop() {
     if (els.deerStateBadge) els.deerStateBadge.textContent = '👂 Ears Perked (Listening...)';
 
     try {
-      // Call mic daemon (detects speech end and returns ~0.4s after user stops talking)
-      const res = await fetch('/api/mic/listen', { method: 'POST' });
-      const data = await res.json();
+      // Listen until the visitor stops talking (~0.4s of silence on the wall PC,
+      // ~0.8s in the browser), then transcribe.
+      const data = await listenOnce();
 
       if (!state.continuousConversationActive) break;
 
       // A song may have started (or been imported) while the mic was listening;
       // discard that capture instead of replying to it.
       if (state.songPlaying) continue;
+
+      // Browser microphone trouble (permission blocked, unplugged): don't spin.
+      if (data && data.ok === false) {
+        await new Promise(r => setTimeout(r, 1500));
+        continue;
+      }
 
       if (data.transcript && data.transcript.trim()) {
         const heard = data.transcript.trim();
@@ -627,23 +637,28 @@ async function runContinuousListeningLoop() {
 // Fast one-off mic test
 async function testMicrophoneLevel() {
   const btns = [els.mainTestMicBtn, els.testMicBtn].filter(Boolean);
+  const usingBrowser = micSource() === MIC_SOURCE_BROWSER;
+  const sourceName = usingBrowser ? 'this computer\u2019s microphone' : 'EMEET PIXY mic';
+
   btns.forEach(b => {
     b.textContent = '🛑 Speak Now...';
   });
-  showToast('🎙️ Speak now! Testing microphone input...');
+  showToast(`🎙️ Speak now! Testing ${sourceName}...`);
 
   try {
-    const res = await fetch('/api/mic/listen', { method: 'POST' });
-    const data = await res.json();
+    const data = await listenOnce();
+    const heard = (data && data.transcript || '').trim();
 
-    if (data.transcript && data.transcript.trim()) {
-      const heard = data.transcript.trim();
-      if (els.micStatusText) els.micStatusText.textContent = `✅ Heard on EMEET PIXY Mic: "${heard}"`;
-      showToast(`🎙️ EMEET PIXY Mic Heard: "${heard}"`);
+    if (heard) {
+      if (els.micStatusText) els.micStatusText.textContent = `✅ Heard on the ${sourceName}: "${heard}"`;
+      showToast(`🎙️ Heard: "${heard}"`);
       appendChatMessage('visitor', `[Mic Test]: ${heard}`);
+    } else if (data && data.ok === false) {
+      if (els.micStatusText) els.micStatusText.textContent = `⚠️ Mic error: ${data.error || 'unknown'}`;
+      showToast(`⚠️ ${data.error || 'Microphone unavailable'}`, 6500);
     } else {
-      if (els.micStatusText) els.micStatusText.textContent = `✅ EMEET PIXY Microphone active! Sound detected.`;
-      showToast(`✅ EMEET PIXY Mic is working! Check VU meter as you speak.`);
+      if (els.micStatusText) els.micStatusText.textContent = `✅ Microphone active! Sound detected.`;
+      showToast(`✅ ${usingBrowser ? 'This computer\u2019s microphone' : 'EMEET PIXY mic'} is working!`);
     }
   } catch (err) {
     if (els.micStatusText) els.micStatusText.textContent = `⚠️ Mic error: ${err.message}`;
@@ -676,10 +691,563 @@ function updateVuMeterDisplay(percent) {
   });
 }
 
+// ============================================================================
+// MICROPHONE SOURCE: the wall PC's EMEET PIXY, or the microphone on whatever
+// computer is viewing this page. Browser audio is recorded here, trimmed by a
+// local voice detector, and posted to the server as a WAV clip to be
+// transcribed with the same speech engine the PIXY daemon uses.
+// ============================================================================
+const MIC_SOURCE_SERVER = 'server';
+const MIC_SOURCE_BROWSER = 'browser';
+
+const MIC_HANGOVER_MS = 1000;       // silence that ends an utterance (visitors pause)
+const MIC_PREROLL_MS = 350;         // audio kept from before speech started
+const MIC_MIN_SPEECH_MS = 260;      // shorter than this is a cough, not a sentence
+const MIC_MAX_UTTERANCE_MS = 12000; // hard stop for ramblers
+const MIC_LISTEN_TIMEOUT_MS = 20000;
+
+// Runs on the audio thread so no samples are dropped while the page is busy.
+const MIC_WORKLET_SOURCE = `
+class TweedMicTap extends AudioWorkletProcessor {
+  process(inputs) {
+    const channel = inputs[0] && inputs[0][0];
+    if (channel && channel.length) this.port.postMessage(channel.slice(0));
+    return true;
+  }
+}
+registerProcessor('tweed-mic-tap', TweedMicTap);
+`;
+
+const browserMic = {
+  stream: null,
+  ctx: null,
+  sourceNode: null,
+  tapNode: null,
+  muteNode: null,
+  starting: null,
+  ready: false,
+  error: '',
+  denied: false,
+  level: 0,
+  lastUiAt: 0,
+  awaiting: false,
+  speaking: false,
+  chunks: [],
+  preroll: [],
+  prerollLimit: 1,
+  speechSamples: 0,
+  silenceSamples: 0,
+  loudChunks: 0,
+  noiseFloor: 0.004,
+  deadline: 0,
+  finish: null
+};
+
+let networkInfo = null;
+
+// On the wall PC the PIXY microphone hears the room. Anywhere else, the
+// visitor's own computer should use its own mic.
+function defaultMicSource() {
+  const host = location.hostname;
+  const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '';
+  if (!isLocalHost && window.isSecureContext) return MIC_SOURCE_BROWSER;
+  return MIC_SOURCE_SERVER;
+}
+
+function browserMicSupported() {
+  return Boolean(window.isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+}
+
+// The source actually in use right now. If the visitor asked for their own mic
+// on an insecure page, browsers forbid it: fall back to the PIXY so Buckley can
+// still hear the room, and explain why in the UI.
+function micSource() {
+  if (state.settings.micSource === MIC_SOURCE_BROWSER && browserMicSupported()) {
+    return MIC_SOURCE_BROWSER;
+  }
+  return MIC_SOURCE_SERVER;
+}
+
+function describeMicError(err) {
+  const name = err && err.name;
+  if (name === 'NotAllowedError' || name === 'SecurityError') {
+    return 'Microphone permission was blocked. Allow it in the browser address bar, then reload.';
+  }
+  if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+    return 'No microphone was found on this computer.';
+  }
+  if (name === 'NotReadableError') {
+    return 'Another program is already using this computer\u2019s microphone.';
+  }
+  return (err && err.message) ? err.message : 'Could not open this computer\u2019s microphone.';
+}
+
+async function ensureBrowserMic() {
+  if (browserMic.ready && browserMic.stream && browserMic.stream.active && browserMic.ctx) {
+    if (browserMic.ctx.state === 'suspended') {
+      try { await browserMic.ctx.resume(); } catch {}
+    }
+    return true;
+  }
+  if (browserMic.starting) return browserMic.starting;
+
+  browserMic.starting = (async () => {
+    try {
+      if (!window.isSecureContext) {
+        throw new Error('Browsers only share a microphone over https (or localhost).');
+      }
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('This browser cannot record audio.');
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1
+        },
+        video: false
+      });
+
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      const ctx = new AudioCtx();
+
+      let tapNode;
+      if (ctx.audioWorklet && window.AudioWorkletNode) {
+        const moduleUrl = URL.createObjectURL(new Blob([MIC_WORKLET_SOURCE], { type: 'application/javascript' }));
+        try {
+          await ctx.audioWorklet.addModule(moduleUrl);
+        } finally {
+          URL.revokeObjectURL(moduleUrl);
+        }
+        tapNode = new AudioWorkletNode(ctx, 'tweed-mic-tap');
+        tapNode.port.onmessage = (event) => handleBrowserMicChunk(event.data);
+      } else {
+        // Older Safari has no AudioWorklet; the script processor still delivers
+        // the same chunks (at ~46 ms instead of ~3 ms).
+        tapNode = ctx.createScriptProcessor(2048, 1, 1);
+        tapNode.onaudioprocess = (event) => {
+          handleBrowserMicChunk(event.inputBuffer.getChannelData(0).slice(0));
+        };
+      }
+
+      const sourceNode = ctx.createMediaStreamSource(stream);
+      // Keep the graph alive without echoing the mic back out of the speakers.
+      const muteNode = ctx.createGain();
+      muteNode.gain.value = 0;
+
+      sourceNode.connect(tapNode);
+      tapNode.connect(muteNode);
+      muteNode.connect(ctx.destination);
+
+      browserMic.stream = stream;
+      browserMic.ctx = ctx;
+      browserMic.sourceNode = sourceNode;
+      browserMic.tapNode = tapNode;
+      browserMic.muteNode = muteNode;
+      browserMic.ready = true;
+      browserMic.error = '';
+      browserMic.prerollLimit = Math.max(1, Math.round((ctx.sampleRate * MIC_PREROLL_MS) / 1000));
+
+      if (ctx.state === 'suspended') {
+        try { await ctx.resume(); } catch {}
+      }
+
+      updateMicSourceUI();
+      return true;
+    } catch (err) {
+      browserMic.ready = false;
+      browserMic.error = describeMicError(err);
+      // A blocked permission will not be offered again by the browser, so stop
+      // hammering getUserMedia on every listening turn.
+      browserMic.denied = err && (err.name === 'NotAllowedError' || err.name === 'SecurityError');
+      console.warn('[Mic] This computer\u2019s microphone is unavailable:', err);
+      updateMicSourceUI();
+      showToast(`🎙️ ${browserMic.error}`, 6500);
+      return false;
+    } finally {
+      browserMic.starting = null;
+    }
+  })();
+
+  return browserMic.starting;
+}
+
+async function stopBrowserMic() {
+  resetBrowserUtterance();
+  [browserMic.sourceNode, browserMic.tapNode, browserMic.muteNode].forEach(node => {
+    if (node) { try { node.disconnect(); } catch {} }
+  });
+  if (browserMic.stream) {
+    try { browserMic.stream.getTracks().forEach(track => track.stop()); } catch {}
+  }
+  if (browserMic.ctx) {
+    try { await browserMic.ctx.close(); } catch {}
+  }
+  browserMic.stream = null;
+  browserMic.ctx = null;
+  browserMic.sourceNode = null;
+  browserMic.tapNode = null;
+  browserMic.muteNode = null;
+  browserMic.ready = false;
+  browserMic.level = 0;
+}
+
+function countSamples(list) {
+  let total = 0;
+  for (let i = 0; i < list.length; i += 1) total += list[i].length;
+  return total;
+}
+
+function trackNoiseFloor(rms) {
+  if (rms < browserMic.noiseFloor * 4) {
+    browserMic.noiseFloor = browserMic.noiseFloor * 0.995 + rms * 0.005;
+    browserMic.noiseFloor = Math.max(0.0008, Math.min(0.05, browserMic.noiseFloor));
+  }
+}
+
+function resetBrowserUtterance() {
+  browserMic.awaiting = false;
+  browserMic.speaking = false;
+  browserMic.chunks = [];
+  browserMic.preroll = [];
+  browserMic.speechSamples = 0;
+  browserMic.silenceSamples = 0;
+  browserMic.loudChunks = 0;
+  browserMic.deadline = 0;
+  browserMic.finish = null;
+}
+
+function handleBrowserMicChunk(samples) {
+  if (!samples || !samples.length) return;
+
+  let sum = 0;
+  for (let i = 0; i < samples.length; i += 1) sum += samples[i] * samples[i];
+  const rms = Math.sqrt(sum / samples.length);
+  browserMic.level = Math.min(100, Math.round(rms * 500));
+
+  const now = performance.now();
+  if (now - browserMic.lastUiAt > 80) {
+    browserMic.lastUiAt = now;
+    if (micSource() === MIC_SOURCE_BROWSER) {
+      updateVuMeterDisplay(browserMic.level);
+      updateMicStateBadge(browserMic.level);
+    }
+  }
+
+  if (!browserMic.awaiting || !browserMic.ctx) {
+    trackNoiseFloor(rms);
+    return;
+  }
+
+  // Rolling pre-speech buffer, so a sentence never loses its first syllable.
+  browserMic.preroll.push(samples);
+  let buffered = countSamples(browserMic.preroll);
+  while (buffered > browserMic.prerollLimit && browserMic.preroll.length > 1) {
+    buffered -= browserMic.preroll.shift().length;
+  }
+
+  const startThreshold = Math.max(0.010, browserMic.noiseFloor * 3.5);
+  const stopThreshold = Math.max(0.006, browserMic.noiseFloor * 1.8);
+  const sampleRate = browserMic.ctx.sampleRate;
+
+  if (!browserMic.speaking) {
+    if (rms > startThreshold) {
+      browserMic.loudChunks += 1;
+      if (browserMic.loudChunks >= 2) {
+        browserMic.speaking = true;
+        browserMic.chunks = browserMic.preroll.slice();
+        browserMic.speechSamples = countSamples(browserMic.chunks);
+        browserMic.silenceSamples = 0;
+      }
+    } else {
+      browserMic.loudChunks = 0;
+      trackNoiseFloor(rms);
+    }
+    if (now > browserMic.deadline) finishBrowserUtterance('timeout');
+    return;
+  }
+
+  browserMic.chunks.push(samples);
+  browserMic.speechSamples += samples.length;
+
+  if (rms < stopThreshold) {
+    browserMic.silenceSamples += samples.length;
+  } else {
+    browserMic.silenceSamples = 0;
+  }
+
+  if (browserMic.silenceSamples >= (sampleRate * MIC_HANGOVER_MS) / 1000) {
+    finishBrowserUtterance('speech-end');
+    return;
+  }
+  if (browserMic.speechSamples >= (sampleRate * MIC_MAX_UTTERANCE_MS) / 1000) {
+    finishBrowserUtterance('max-length');
+  }
+}
+
+function finishBrowserUtterance(reason) {
+  const sampleRate = browserMic.ctx ? browserMic.ctx.sampleRate : 48000;
+  const minSamples = (sampleRate * MIC_MIN_SPEECH_MS) / 1000;
+
+  if (reason === 'timeout') {
+    const finish = browserMic.finish;
+    resetBrowserUtterance();
+    if (finish) finish({ ok: true, transcript: '', timeout: true });
+    return;
+  }
+
+  // A door slam or a cough: forget it and keep waiting for a real sentence.
+  if (reason === 'speech-end' && browserMic.speechSamples < minSamples) {
+    browserMic.speaking = false;
+    browserMic.chunks = [];
+    browserMic.preroll = [];
+    browserMic.speechSamples = 0;
+    browserMic.silenceSamples = 0;
+    browserMic.loudChunks = 0;
+    return;
+  }
+
+  const chunks = browserMic.chunks;
+  const finish = browserMic.finish;
+  resetBrowserUtterance();
+  transcribeBrowserClip(chunks, sampleRate, finish);
+}
+
+function concatFloat32(chunks) {
+  const total = countSamples(chunks);
+  const out = new Float32Array(total);
+  let offset = 0;
+  for (let i = 0; i < chunks.length; i += 1) {
+    out.set(chunks[i], offset);
+    offset += chunks[i].length;
+  }
+  return out;
+}
+
+// 44-byte canonical WAV header + 16-bit mono PCM, which is what the Python
+// speech engine expects.
+function encodeWav16(samples, sampleRate) {
+  const dataSize = samples.length * 2;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+
+  const writeAscii = (offset, text) => {
+    for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i));
+  };
+
+  const rate = Math.round(sampleRate) || 48000;
+  writeAscii(0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  writeAscii(8, 'WAVE');
+  writeAscii(12, 'fmt ');
+  view.setUint32(16, 16, true);          // fmt chunk length
+  view.setUint16(20, 1, true);           // PCM
+  view.setUint16(22, 1, true);           // mono
+  view.setUint32(24, rate, true);
+  view.setUint32(28, rate * 2, true);    // byte rate
+  view.setUint16(32, 2, true);           // block align
+  view.setUint16(34, 16, true);          // bits per sample
+  writeAscii(36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  let offset = 44;
+  for (let i = 0; i < samples.length; i += 1) {
+    const clamped = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, Math.round(clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff), true);
+    offset += 2;
+  }
+
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
+async function transcribeBrowserClip(chunks, sampleRate, finish) {
+  const pcm = concatFloat32(chunks);
+  if (!pcm.length) {
+    if (finish) finish({ ok: true, transcript: '' });
+    return;
+  }
+
+  const controller = new AbortController();
+  const guard = setTimeout(() => controller.abort(), 25000);
+  try {
+    const res = await fetch('/api/mic/transcribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'audio/wav' },
+      body: encodeWav16(pcm, sampleRate),
+      signal: controller.signal
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) {
+      throw new Error(data.error || `speech engine returned ${res.status}`);
+    }
+    if (finish) finish({ ok: true, transcript: String(data.transcript || '').trim() });
+  } catch (err) {
+    console.warn('[Mic] Transcription failed:', err);
+    if (finish) finish({ ok: false, transcript: '', error: err.message });
+  } finally {
+    clearTimeout(guard);
+  }
+}
+
+// One "listen until the visitor stops talking" turn, using this computer's mic.
+async function captureBrowserUtterance() {
+  // Permission was refused already: report it instead of re-prompting forever.
+  if (browserMic.denied && !browserMic.ready) {
+    return { ok: false, transcript: '', error: browserMic.error };
+  }
+
+  const ok = await ensureBrowserMic();
+  if (!ok) {
+    return { ok: false, transcript: '', error: browserMic.error };
+  }
+
+  return new Promise((resolve) => {
+    browserMic.awaiting = true;
+    browserMic.speaking = false;
+    browserMic.chunks = [];
+    browserMic.preroll = [];
+    browserMic.speechSamples = 0;
+    browserMic.silenceSamples = 0;
+    browserMic.loudChunks = 0;
+    browserMic.deadline = performance.now() + MIC_LISTEN_TIMEOUT_MS;
+    browserMic.finish = resolve;
+  });
+}
+
+// Single entry point for "hear one thing the visitor says", whichever
+// microphone is in charge.
+async function listenOnce() {
+  if (micSource() === MIC_SOURCE_BROWSER) {
+    return captureBrowserUtterance();
+  }
+  const res = await fetch('/api/mic/listen', { method: 'POST' });
+  return res.json();
+}
+
+function updateMicStateBadge(level) {
+  if (!els.micStateBadge) return;
+  if (!state.continuousConversationActive) {
+    els.micStateBadge.textContent = 'Paused';
+    els.micStateBadge.className = 'vu-badge';
+  } else if (level > 8) {
+    els.micStateBadge.textContent = 'Speech Detected';
+    els.micStateBadge.className = 'vu-badge listening';
+  } else {
+    els.micStateBadge.textContent = 'Listening Continuously';
+    els.micStateBadge.className = 'vu-badge listening';
+  }
+}
+
+function updateMicSourceUI() {
+  const effective = micSource();
+  const wantsBrowser = state.settings.micSource === MIC_SOURCE_BROWSER;
+  const insecure = !window.isSecureContext;
+
+  [els.micSourceSelect, els.micSourceSelectHw].forEach(select => {
+    if (select && state.settings.micSource) select.value = state.settings.micSource;
+  });
+
+  if (els.vuTitleText) {
+    els.vuTitleText.textContent = effective === MIC_SOURCE_BROWSER
+      ? '\uD83C\uDF99\uFE0F Real-Time Mic Level (this computer):'
+      : '\uD83C\uDF99\uFE0F Real-Time EMEET PIXY Mic Level (VU Meter):';
+  }
+
+  const blocked = wantsBrowser && insecure;
+  // Any plain-http page that is not localhost is blocked from mic access, so
+  // point the visitor at the secure address even before they ask.
+  if (els.micHttpsBanner) els.micHttpsBanner.classList.toggle('hidden', !insecure);
+
+  if (els.micSourceHint) {
+    if (blocked) {
+      els.micSourceHint.textContent = 'This page is not secure, so browsers block microphone access here.';
+    } else if (effective === MIC_SOURCE_BROWSER) {
+      els.micSourceHint.textContent = browserMic.error
+        ? browserMic.error
+        : (browserMic.ready
+            ? 'Using this computer\u2019s microphone.'
+            : 'Click anywhere once to let the browser use this microphone.');
+    } else if (insecure) {
+      els.micSourceHint.textContent = 'Using the EMEET PIXY mic on the wall PC — open the https address to talk from this computer.';
+    } else {
+      els.micSourceHint.textContent = 'Using the EMEET PIXY mic on the wall PC.';
+    }
+  }
+}
+
+async function onMicSourceChange(value) {
+  const next = value === MIC_SOURCE_BROWSER ? MIC_SOURCE_BROWSER : MIC_SOURCE_SERVER;
+  state.settings.micSource = next;
+  localStorage.setItem('tweed_micSource', next);
+
+  if (next === MIC_SOURCE_BROWSER) {
+    browserMic.denied = false; // an explicit choice may re-open the door
+    if (!window.isSecureContext) {
+      showToast('🔒 This page is not secure. Open the https address to use this computer\u2019s microphone.', 7000);
+    } else {
+      const ok = await ensureBrowserMic();
+      if (ok) showToast('🎙️ Now listening with this computer\u2019s microphone.');
+    }
+  } else {
+    await stopBrowserMic();
+    showToast('🎙️ Now listening with the EMEET PIXY mic on the wall PC.');
+  }
+
+  updateMicSourceUI();
+}
+
+async function initMicSourceUI() {
+  if (!state.settings.micSource) {
+    state.settings.micSource = defaultMicSource();
+    localStorage.setItem('tweed_micSource', state.settings.micSource);
+  }
+
+  [els.micSourceSelect, els.micSourceSelectHw].forEach(select => {
+    select?.addEventListener('change', () => onMicSourceChange(select.value));
+  });
+
+  // Browsers need a gesture before an AudioContext may run, and some also
+  // require one before showing the microphone permission prompt.
+  document.addEventListener('pointerdown', () => {
+    if (micSource() === MIC_SOURCE_BROWSER && !browserMic.denied) ensureBrowserMic();
+  }, { passive: true });
+
+  updateMicSourceUI();
+
+  try {
+    const res = await fetch('/api/net/info', { cache: 'no-store' });
+    networkInfo = await res.json();
+
+    const httpsUrls = (networkInfo.addresses || []).map(item => item.httpsUrl).filter(Boolean);
+    const here = (networkInfo.addresses || []).find(item => item.address === location.hostname);
+    const target = here ? here.httpsUrl : httpsUrls[0];
+
+    if (els.micHttpsLink && target) {
+      els.micHttpsLink.href = target;
+      els.micHttpsLink.textContent = target;
+    }
+  } catch (err) {
+    console.warn('[Net] Could not read network info:', err.message);
+  }
+
+  updateMicSourceUI();
+}
+
 function startRealtimeHardwareVuPolling() {
   let vuInFlight = false;
 
   setInterval(async () => {
+    // When this browser owns the microphone, its audio tap feeds the meter and
+    // the Python daemon on the wall PC has nothing to do with it.
+    if (micSource() === MIC_SOURCE_BROWSER) {
+      if (browserMic.ready) return;
+      // Not granted yet: keep the meter still instead of showing the PIXY level.
+      updateVuMeterDisplay(0);
+      return;
+    }
+
     // Never stack VU requests — a slow mic daemon must not eat browser connections
     if (vuInFlight) return;
     vuInFlight = true;
@@ -692,19 +1260,7 @@ function startRealtimeHardwareVuPolling() {
         const data = await res.json();
         const rawLevel = Number(data.level || 0);
         updateVuMeterDisplay(rawLevel);
-
-        if (els.micStateBadge) {
-          if (!state.continuousConversationActive) {
-            els.micStateBadge.textContent = 'Paused';
-            els.micStateBadge.className = 'vu-badge';
-          } else if (rawLevel > 8) {
-            els.micStateBadge.textContent = 'Speech Detected';
-            els.micStateBadge.className = 'vu-badge listening';
-          } else {
-            els.micStateBadge.textContent = 'Listening Continuously';
-            els.micStateBadge.className = 'vu-badge listening';
-          }
-        }
+        updateMicStateBadge(rawLevel);
       }
     } catch {}
     finally {

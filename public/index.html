@@ -208,7 +208,7 @@
           <div class="vu-meter-header">
             <div class="vu-title">
               <span id="vuStatusDot" class="vu-dot active"></span>
-              <strong>🎙️ Real-Time EMEET PIXY Mic Level (VU Meter):</strong>
+              <strong id="vuTitleText">🎙️ Real-Time EMEET PIXY Mic Level (VU Meter):</strong>
               <span id="vuLevelLabel">0% (-∞ dB)</span>
             </div>
             <div class="vu-actions">
@@ -237,6 +237,22 @@
             <div class="vu-seg yellow" data-idx="13"></div>
             <div class="vu-seg red" data-idx="14"></div>
             <div class="vu-seg red" data-idx="15"></div>
+          </div>
+
+          <!-- WHICH MICROPHONE IS LISTENING: wall PC's PIXY, or this computer's -->
+          <div class="mic-source-row">
+            <label for="micSourceSelect">🎧 Listening with:</label>
+            <select id="micSourceSelect" class="hw-select-compact">
+              <option value="server">🖥️ This wall PC's mic (EMEET PIXY)</option>
+              <option value="browser">💻 This computer's microphone</option>
+            </select>
+            <span id="micSourceHint" class="mic-source-hint"></span>
+          </div>
+
+          <div id="micHttpsBanner" class="mic-https-banner hidden">
+            <span>🔒 Browsers only allow microphone access on a secure page.</span>
+            <a id="micHttpsLink" href="#" target="_blank" rel="noopener">Open the https address</a>
+            <span class="mic-https-note">(accept the one-time certificate warning)</span>
           </div>
         </div>
       </section>
@@ -386,6 +402,15 @@
         <section class="card hw-card">
           <h3>🎙️ 2. Audio Input (Microphone)</h3>
           <p class="hw-help">Choose which Windows 11 microphone listens when visitors talk to the Deerhead on the wall.</p>
+
+          <div class="form-group">
+            <label for="micSourceSelectHw">Which microphone listens to visitors?</label>
+            <select id="micSourceSelectHw" class="hw-select">
+              <option value="server">🖥️ Microphone on the wall PC (EMEET PIXY)</option>
+              <option value="browser">💻 Microphone on the computer viewing this page</option>
+            </select>
+            <p class="hw-help">Pick the second option to talk to Buckley from a laptop or phone that opened this page. Browsers only allow that on the secure <strong>https://</strong> address — the Live tab shows the exact link.</p>
+          </div>
 
           <div class="form-group">
             <label for="micSelect">Select Microphone Input:</label>

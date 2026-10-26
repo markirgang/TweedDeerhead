@@ -1208,3 +1208,61 @@ body {
   min-width: 96px;
   text-align: right;
 }
+
+/* ============================================================================
+   MICROPHONE SOURCE (wall PC vs the computer viewing the page)
+   ============================================================================ */
+.mic-source-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+  margin-top: 0.6rem;
+  padding-top: 0.55rem;
+  border-top: 1px dashed var(--border-wood);
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.mic-source-row label {
+  font-weight: 700;
+  color: var(--text-main);
+  white-space: nowrap;
+}
+
+.mic-source-row select {
+  min-width: 240px;
+}
+
+.mic-source-hint {
+  flex: 1 1 220px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.mic-https-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.55rem;
+  padding: 0.5rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid rgba(229, 154, 60, 0.55);
+  background: rgba(229, 154, 60, 0.1);
+  font-size: 0.8rem;
+  color: var(--text-main);
+}
+
+.mic-https-banner a {
+  color: var(--amber-bright);
+  font-weight: 700;
+  text-decoration: underline;
+  word-break: break-all;
+}
+
+.mic-https-note {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}

@@ -18,6 +18,10 @@ An interactive, animatronic-style AI Deerhead ("**Buckley**, the Tweed Blvd Stag
     - **Speaker / Audio Output** & **Voice Synthesis** (pitch, rate, volume, and speaker test)
       - **123 male & female voices from 50 countries:** British, Australian, Indian, Scottish, Irish, New Zealand, South African, Canadian, Singaporean, Kenyan, Tanzanian, Filipino and American, plus Spanish, French, German, Italian, Portuguese, Dutch, Swedish, Polish, Russian, Turkish, Hindi, Japanese, Korean, Mandarin, Arabic, Hebrew, Greek, Czech, Danish, Finnish, Norwegian, Hungarian, Romanian, Ukrainian, Vietnamese, Thai, Indonesian, Malay, Tamil, Telugu, Bengali, Gujarati, Kannada, Malayalam, Marathi, Persian and Urdu.
     - **Windows 11 Device Manager PnP Inspector** (scans connected cameras, Pixy USB devices, audio endpoints, and COM ports)
+- **💻 Talk From Any Computer on the Network:**
+  - Open the app's **https** address on a laptop, tablet or phone and switch **🎧 Listening with** to that machine's own microphone — no software to install.
+  - Browser audio is voice-detected locally, sent to the wall PC as a small WAV clip, transcribed there, and answered by Buckley. The reply plays on the visitor's computer.
+  - The wall PC's PIXY microphone keeps working independently, so people standing at 121 Tweed Blvd are never ignored.
 - **🎵 Music &amp; Lipsync:**
   - Import any **MP3 / WAV / M4A / OGG** file (drag it onto the card or use **Choose MP3**) and Buckley's jaw solenoid chatters along with the song in real time.
   - The jaw is driven from the **live audio envelope** (Web Audio analyser), not a fixed timer, so it speeds up on busy passages and closes during quiet ones.
@@ -65,3 +69,56 @@ curl -L -o voices/en_GB-alba-medium.onnx.json `
 ```
 
 To refresh the voice catalog from Microsoft: `python build_voice_catalog.py`
+
+---
+
+## 💻 Talking to Buckley From Another Computer
+
+Any laptop, tablet or phone on the same home network can open the app and talk to
+Buckley through **its own microphone**. The wall PC's PIXY microphone keeps
+listening too — the person in front of the deerhead can always just speak.
+
+### Which address to open
+
+| Address | What it does |
+|---|---|
+| `http://localhost:3121` | Full app on the wall PC (PIXY camera + PIXY mic) |
+| `http://<lan-ip>:3121` | Watch + read from another device. **Mic is blocked** — browsers refuse microphone access on plain `http://` |
+| `https://<lan-ip>:3443` | **Use this one to talk from another device.** Secure page, browser microphone allowed |
+| `https://tweedeer.local:3443` | Same thing using the PC's name, if your router resolves `.local` |
+
+The Live tab shows the exact `https://…:3443` link for the network the app is on,
+and the server prints both URLs at startup.
+
+### Steps on the visitor's computer
+
+1. Open the **https** address (e.g. `https://192.168.86.180:3443`).
+2. The browser warns about a self-signed certificate. Choose **Advanced → Proceed**
+   (Chrome/Edge) or **Advanced → Accept the Risk and Continue** (Firefox). This is
+   expected: the certificate is generated locally by this PC.
+3. Set **🎧 Listening with:** to **💻 This computer's microphone** — on the Live tab
+   or in Hardware Settings.
+4. Allow microphone access when the browser asks. The VU meter now follows that
+   computer's microphone, and Buckley answers through that computer's speakers.
+
+### Optional: remove the certificate warning
+
+Double-click **`certs/tweed-deerhead.cer`** on the visitor's PC and install it into
+**Trusted Root Certification Authorities**. After that the padlock is green and no
+warning appears. The certificate is valid for 5 years.
+
+### Notes
+
+- The certificate covers this PC's name, `localhost`, and its LAN IP addresses. If
+  the router assigns a **new IP**, regenerate it and restart the server:
+  ```powershell
+  powershell -File .\make_cert.ps1 -OutDir .\certs
+  ```
+  The server also creates it automatically on first start.
+- `certs/` is gitignored — the private key and password are never committed.
+- Override the secure port with `HTTPS_PORT` (for example `set HTTPS_PORT=8443`) if
+  3443 is already taken.
+- Audio is transcribed on the wall PC by `mic_daemon.py`, so the visitor's computer
+  only needs a browser — nothing to install.
+- Selecting the PIXY mic on a remote device still works for *listening*, but the
+  audio comes from the wall PC's room, not from that device.
