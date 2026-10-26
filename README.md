@@ -24,6 +24,7 @@ An interactive, animatronic-style AI Deerhead ("**Buckley**, the Tweed Blvd Stag
   - The wall PC's PIXY microphone keeps working independently, so people standing at 121 Tweed Blvd are never ignored.
 - **🎵 Music &amp; Lipsync:**
   - Import any **MP3 / WAV / M4A / OGG** file (drag it onto the card or use **Choose MP3**) and Buckley's jaw solenoid chatters along with the song in real time.
+  - **Import a YouTube link** — paste a `youtu.be/…` or `youtube.com/watch?v=…` URL and Buckley downloads just the audio track onto the wall PC, then lipsyncs to it exactly like a local file. Imported tracks are cached and listed so you can replay them with one click.
   - The jaw is driven from the **live audio envelope** (Web Audio analyser), not a fixed timer, so it speeds up on busy passages and closes during quiet ones.
   - Play / pause / stop, seek, and volume controls, plus a live jaw meter showing `[OPEN - ON]` / `[SHUT - OFF]`.
   - While a song plays the microphone loop pauses so Buckley sings instead of trying to answer the stereo, and a **👄 Lipsync** switch turns the jaw motion off if you just want the music.
@@ -69,6 +70,37 @@ curl -L -o voices/en_GB-alba-medium.onnx.json `
 ```
 
 To refresh the voice catalog from Microsoft: `python build_voice_catalog.py`
+
+---
+
+## 🎬 Importing a YouTube Link
+
+Paste a YouTube URL into the **Music & Lipsync** card and press **🎬 Import YouTube**.
+
+Buckley downloads **only the audio track** onto the wall PC, caches it under
+`cache/youtube/`, and plays it from this server. That last part matters: a browser
+can never read the audio out of a YouTube embed (it lives in a cross-origin
+iframe), so an embedded player would force the jaw onto a fake timer. By serving
+the audio ourselves the `<audio>` element is same-origin, the Web Audio analyser
+can see the waveform, and the jaw follows the **real** song.
+
+- Supported links: `youtu.be/…`, `youtube.com/watch?v=…`, `/shorts/…`, `/live/…`, and bare 11-character video ids.
+- Imports are cached — pasting the same link again is instant and never re-downloads.
+- Imported tracks appear in **📼 Imported from YouTube**; click one to load it, `✕` to delete it from the PC.
+- Cache entries older than 30 days are pruned at startup.
+
+**One-time setup** (needs Python, which this app already uses):
+
+```powershell
+python -m pip install --user yt-dlp
+```
+
+The server looks for `yt-dlp` on `PATH`, then `python -m yt_dlp`, then `py -3 -m yt_dlp`.
+If none is found the card shows an install hint and local MP3 playback keeps working.
+`ffmpeg` is **not** required — YouTube's m4a audio stream is used as-is.
+
+> YouTube sometimes asks a network to "confirm you're not a bot". If an import
+> fails with that message, wait a minute and retry, or drop the song in as an MP3.
 
 ---
 
@@ -122,3 +154,6 @@ warning appears. The certificate is valid for 5 years.
   only needs a browser — nothing to install.
 - Selecting the PIXY mic on a remote device still works for *listening*, but the
   audio comes from the wall PC's room, not from that device.
+- Set `TW_NO_DAEMONS=1` before `node server.js` to run just the web page, without
+  starting the Python camera / mic / voice daemons. Handy for testing the UI on a
+  machine that has no PIXY attached.

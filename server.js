@@ -45,7 +45,11 @@ function startCameraBridge() {
     setTimeout(startCameraBridge, 2000);
   });
 }
-startCameraBridge();
+// Set TW_NO_DAEMONS=1 to run the web UI without touching the camera, mic or
+// voice hardware (useful for testing the page on a machine with no Python).
+const DAEMONS_ENABLED = process.env.TW_NO_DAEMONS !== '1';
+
+if (DAEMONS_ENABLED) startCameraBridge();
 
 // ============================================================================
 // 3. PERSISTENT PYTHON EMEET PIXY MIC & VU DAEMON (DEVICE 1 @ 44.1 kHz)
@@ -63,7 +67,7 @@ function startMicDaemon() {
     setTimeout(startMicDaemon, 2000);
   });
 }
-startMicDaemon();
+if (DAEMONS_ENABLED) startMicDaemon();
 
 // ============================================================================
 // 4. PERSISTENT POWERSHELL SPEECH DAEMON (ZERO STARTUP LAG FOR TTS)
@@ -161,7 +165,7 @@ function startVoiceDaemon() {
     setTimeout(startVoiceDaemon, 3000);
   });
 }
-startVoiceDaemon();
+if (DAEMONS_ENABLED) startVoiceDaemon();
 
 let voiceCatalog = { voices: [], ready: false };
 let voiceCatalogAt = 0;
@@ -762,6 +766,270 @@ function instantBuckleyFallback(userMessage, visionSummary) {
   return "Loud and clear from the wall at 121 Tweed Blvd in Nyack! Tell me what's on your mind!";
 }
 
+// ============================================================================
+// YOUTUBE IMPORT — audio only, so the jaw can lipsync for real
+//
+// A browser can never read the audio out of a YouTube embed: the player lives
+// in a cross-origin iframe, so Web Audio sees silence. Instead the wall PC
+// downloads just the audio track with yt-dlp, caches it under cache/youtube,
+// and serves it from this same origin. The <audio> element is then analysable
+// exactly like a local MP3, so the existing envelope-driven jaw keeps working.
+// ============================================================================
+const YT_CACHE_DIR = path.join(__dirname, 'cache', 'youtube');
+const YT_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const YT_DOWNLOAD_TIMEOUT_MS = 180000;
+
+// YouTube's format 140 is AAC in an MP4 container; every modern browser plays
+// it. WebM/Opus is the fallback when no m4a stream is offered.
+const YT_AUDIO_MIME = {
+  '.m4a': 'audio/mp4',
+  '.mp4': 'audio/mp4',
+  '.webm': 'audio/webm',
+  '.opus': 'audio/ogg',
+  '.ogg': 'audio/ogg',
+  '.mp3': 'audio/mpeg'
+};
+
+let ytDlpRunner = null; // { label, file, args } once a working install is found
+let ytDlpProbe = null;
+
+// yt-dlp may be on PATH, installed as a Python module, or launched through the
+// py launcher. Probe once, remember whichever works.
+function probeYtDlp() {
+  if (ytDlpProbe) return ytDlpProbe;
+
+  const candidates = [
+    { label: 'yt-dlp', file: 'yt-dlp', args: [] },
+    { label: 'python -m yt_dlp', file: 'python', args: ['-m', 'yt_dlp'] },
+    { label: 'py -3 -m yt_dlp', file: 'py', args: ['-3', '-m', 'yt_dlp'] }
+  ];
+
+  ytDlpProbe = new Promise((resolve) => {
+    let index = 0;
+    const tryNext = () => {
+      if (index >= candidates.length) return resolve(null);
+      const candidate = candidates[index++];
+      execFile(candidate.file, [...candidate.args, '--version'],
+        { timeout: 15000, windowsHide: true },
+        (err, stdout) => {
+          if (!err && /^\d{4}\./.test(String(stdout).trim())) {
+            ytDlpRunner = candidate;
+            console.log(`[YouTube] Using ${candidate.label}`);
+            return resolve(candidate);
+          }
+          tryNext();
+        });
+    };
+    tryNext();
+  });
+
+  return ytDlpProbe;
+}
+
+function ensureYtCacheDir() {
+  try {
+    fs.mkdirSync(YT_CACHE_DIR, { recursive: true });
+  } catch {}
+}
+
+// Accepts a full watch/shorts/youtu.be link, a bare 11-character video id, or
+// a URL pasted without its scheme.
+function parseYouTubeId(input) {
+  const raw = String(input || '').trim();
+  if (!raw) return null;
+  if (/^[A-Za-z0-9_-]{11}$/.test(raw)) return raw;
+
+  let url;
+  try {
+    url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`);
+  } catch {
+    return null;
+  }
+
+  const host = url.hostname.replace(/^www\./i, '').toLowerCase();
+  const isYouTube = host === 'youtube.com' || host === 'youtu.be' ||
+    host === 'youtube-nocookie.com' || host.endsWith('.youtube.com');
+  if (!isYouTube) return null;
+
+  if (host === 'youtu.be') {
+    const id = url.pathname.split('/').filter(Boolean)[0] || '';
+    return /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null;
+  }
+
+  const fromQuery = url.searchParams.get('v');
+  if (fromQuery && /^[A-Za-z0-9_-]{11}$/.test(fromQuery)) return fromQuery;
+
+  const parts = url.pathname.split('/').filter(Boolean);
+  if (parts.length >= 2 && ['embed', 'shorts', 'live', 'v'].includes(parts[0])) {
+    return /^[A-Za-z0-9_-]{11}$/.test(parts[1]) ? parts[1] : null;
+  }
+  return null;
+}
+
+function ytAudioFileFor(id) {
+  let names = [];
+  try {
+    names = fs.readdirSync(YT_CACHE_DIR);
+  } catch {
+    return null;
+  }
+  const name = names.find((entry) =>
+    entry.startsWith(`${id}.`) &&
+    !entry.endsWith('.info.json') &&
+    !entry.endsWith('.part') &&
+    YT_AUDIO_MIME[path.extname(entry).toLowerCase()]);
+  return name || null;
+}
+
+function ytTrackFromInfoFile(infoPath) {
+  let info;
+  try {
+    info = JSON.parse(fs.readFileSync(infoPath, 'utf8'));
+  } catch {
+    return null;
+  }
+
+  const id = info.id || path.basename(infoPath, '.info.json');
+  const fileName = ytAudioFileFor(id);
+  if (!fileName) return null;
+
+  const fullPath = path.join(YT_CACHE_DIR, fileName);
+  let stats;
+  try {
+    stats = fs.statSync(fullPath);
+  } catch {
+    return null;
+  }
+
+  return {
+    id,
+    title: info.title || id,
+    duration: Number(info.duration) || 0,
+    uploader: info.uploader || info.channel || '',
+    fileName,
+    size: stats.size,
+    addedAt: stats.mtimeMs,
+    url: `/media/youtube/${encodeURIComponent(fileName)}`
+  };
+}
+
+function listYouTubeTracks() {
+  ensureYtCacheDir();
+  let names = [];
+  try {
+    names = fs.readdirSync(YT_CACHE_DIR);
+  } catch {
+    return [];
+  }
+  return names
+    .filter((name) => name.endsWith('.info.json'))
+    .map((name) => ytTrackFromInfoFile(path.join(YT_CACHE_DIR, name)))
+    .filter(Boolean)
+    .sort((a, b) => b.addedAt - a.addedAt);
+}
+
+// yt-dlp writes a lot of noise; surface the one line that actually explains
+// the failure, translated into something a person standing at the wall can act on.
+function cleanYtDlpError(raw) {
+  const lines = String(raw || '')
+    .replace(/\u001b\[[0-9;]*m/g, '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const errorLine = [...lines].reverse().find((line) => /^ERROR:/i.test(line));
+  const message = (errorLine || lines[0] || 'yt-dlp failed').replace(/^ERROR:\s*/i, '');
+
+  if (/sign in to confirm|not a bot|cookies/i.test(message)) {
+    return 'YouTube is asking this PC to prove it is not a bot. Wait a minute and try again, or import the song as an MP3 file instead.';
+  }
+  if (/video unavailable|private video|has been removed|age-restricted|members-only/i.test(message)) {
+    return 'That video is private, age-restricted, removed, or blocked in this region.';
+  }
+  if (/unsupported url|is not a valid url/i.test(message)) {
+    return 'That link is not a YouTube video.';
+  }
+  return message.slice(0, 300);
+}
+
+function downloadYouTubeAudio(videoId, sourceUrl) {
+  return new Promise((resolve, reject) => {
+    if (!ytDlpRunner) {
+      reject(new Error('yt-dlp is not available.'));
+      return;
+    }
+
+    ensureYtCacheDir();
+
+    const args = [
+      ...ytDlpRunner.args,
+      '--no-playlist',
+      '--no-progress',
+      '--no-warnings',
+      '--no-part',
+      '--socket-timeout', '20',
+      '--retries', '3',
+      '-f', 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
+      '--write-info-json',
+      '-o', path.join(YT_CACHE_DIR, '%(id)s.%(ext)s'),
+      sourceUrl
+    ];
+
+    execFile(ytDlpRunner.file, args,
+      { timeout: YT_DOWNLOAD_TIMEOUT_MS, windowsHide: true, maxBuffer: 8 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err) {
+          reject(new Error(cleanYtDlpError(stderr || stdout || err.message)));
+          return;
+        }
+        const track = ytTrackFromInfoFile(path.join(YT_CACHE_DIR, `${videoId}.info.json`));
+        if (!track) {
+          reject(new Error('The download finished but no playable audio was produced.'));
+          return;
+        }
+        resolve(track);
+      });
+  });
+}
+
+function deleteYouTubeTrack(videoId) {
+  if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) return false;
+  let removed = false;
+  let names = [];
+  try {
+    names = fs.readdirSync(YT_CACHE_DIR);
+  } catch {
+    return false;
+  }
+  for (const name of names) {
+    if (name.startsWith(`${videoId}.`)) {
+      try {
+        fs.unlinkSync(path.join(YT_CACHE_DIR, name));
+        removed = true;
+      } catch {}
+    }
+  }
+  return removed;
+}
+
+// Keep the cache from growing forever on the wall PC's small drive.
+function pruneYouTubeCache() {
+  ensureYtCacheDir();
+  const cutoff = Date.now() - YT_CACHE_MAX_AGE_MS;
+  let names = [];
+  try {
+    names = fs.readdirSync(YT_CACHE_DIR);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const full = path.join(YT_CACHE_DIR, name);
+    try {
+      if (fs.statSync(full).mtimeMs < cutoff) fs.unlinkSync(full);
+    } catch {}
+  }
+}
+
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -1098,6 +1366,139 @@ const requestHandler = async (req, res) => {
     }
   }
 
+  // ---------------------------------------------------------------------
+  // YouTube import: download the audio track so the jaw can lipsync to it
+  // ---------------------------------------------------------------------
+  if (pathname === '/api/youtube/tracks' && req.method === 'GET') {
+    return sendJson(res, 200, {
+      ok: true,
+      tracks: listYouTubeTracks(),
+      ytDlpAvailable: Boolean(ytDlpRunner)
+    });
+  }
+
+  if (pathname === '/api/youtube/load' && req.method === 'POST') {
+    let body = {};
+    try {
+      body = await parseBody(req);
+    } catch {
+      body = {};
+    }
+
+    const videoId = parseYouTubeId(body.url);
+    if (!videoId) {
+      return sendJson(res, 400, {
+        ok: false,
+        error: 'That is not a YouTube link. Paste something like https://youtu.be/… or https://www.youtube.com/watch?v=…'
+      });
+    }
+
+    const alreadyCached = listYouTubeTracks().find((track) => track.id === videoId);
+    if (alreadyCached) {
+      return sendJson(res, 200, { ok: true, track: alreadyCached, cached: true });
+    }
+
+    const runner = await probeYtDlp();
+    if (!runner) {
+      return sendJson(res, 503, {
+        ok: false,
+        code: 'NO_YTDLP',
+        error: 'yt-dlp is not installed on the wall PC. Run: python -m pip install --user yt-dlp'
+      });
+    }
+
+    console.log(`[YouTube] Importing ${videoId}…`);
+    try {
+      const track = await downloadYouTubeAudio(videoId, `https://www.youtube.com/watch?v=${videoId}`);
+      console.log(`[YouTube] Ready: ${track.title} (${Math.round(track.size / 1024)} KB)`);
+      return sendJson(res, 200, { ok: true, track, cached: false });
+    } catch (err) {
+      console.warn(`[YouTube] Import failed for ${videoId}: ${err.message}`);
+      return sendJson(res, 502, { ok: false, error: err.message });
+    }
+  }
+
+  if (pathname === '/api/youtube/delete' && req.method === 'POST') {
+    let body = {};
+    try {
+      body = await parseBody(req);
+    } catch {
+      body = {};
+    }
+    const id = String((body && body.id) || '').trim();
+    const removed = deleteYouTubeTrack(id);
+    return sendJson(res, removed ? 200 : 404, {
+      ok: removed,
+      error: removed ? undefined : 'That track is not in the cache.'
+    });
+  }
+
+  // Cached YouTube audio, with byte ranges so the seek bar works.
+  if (pathname.startsWith('/media/youtube/') && (req.method === 'GET' || req.method === 'HEAD')) {
+    let fileName;
+    try {
+      fileName = path.basename(decodeURIComponent(pathname.slice('/media/youtube/'.length)));
+    } catch {
+      res.writeHead(400);
+      return res.end('Bad request');
+    }
+
+    const filePath = path.join(YT_CACHE_DIR, fileName);
+    if (!filePath.startsWith(YT_CACHE_DIR)) {
+      res.writeHead(403);
+      return res.end('Forbidden');
+    }
+
+    return fs.stat(filePath, (err, stats) => {
+      if (err || !stats.isFile()) {
+        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+        return res.end('404 Not Found');
+      }
+
+      const ext = path.extname(filePath).toLowerCase();
+      const headers = {
+        'Content-Type': YT_AUDIO_MIME[ext] || 'application/octet-stream',
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'public, max-age=3600'
+      };
+
+      const range = req.headers.range;
+      if (range) {
+        const match = /^bytes=(\d*)-(\d*)$/.exec(String(range).trim());
+        if (match) {
+          const hasStart = match[1] !== '';
+          const hasEnd = match[2] !== '';
+          let start = hasStart ? Number(match[1]) : 0;
+          let end = hasEnd ? Number(match[2]) : stats.size - 1;
+
+          // "bytes=-500" means the last 500 bytes, not from zero.
+          if (!hasStart && hasEnd) {
+            start = Math.max(0, stats.size - Number(match[2]));
+            end = stats.size - 1;
+          }
+
+          if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= stats.size) {
+            res.writeHead(416, { 'Content-Range': `bytes */${stats.size}` });
+            return res.end();
+          }
+          end = Math.min(end, stats.size - 1);
+
+          res.writeHead(206, {
+            ...headers,
+            'Content-Range': `bytes ${start}-${end}/${stats.size}`,
+            'Content-Length': end - start + 1
+          });
+          if (req.method === 'HEAD') return res.end();
+          return fs.createReadStream(filePath, { start, end }).pipe(res);
+        }
+      }
+
+      res.writeHead(200, { ...headers, 'Content-Length': stats.size });
+      if (req.method === 'HEAD') return res.end();
+      fs.createReadStream(filePath).pipe(res);
+    });
+  }
+
   let safePath = path.normalize(pathname === '/' ? '/index.html' : pathname).replace(/^(\.\.[/\\])+/, '');
   let filePath = path.join(PUBLIC_DIR, safePath);
 
@@ -1126,6 +1527,7 @@ server.listen(PORT, () => {
   console.log(`🎙️ EMEET PIXY Mic & Real-time VU Daemon: Port 3123`);
   console.log(`🗣️ International Voice Bank (123 voices, 50 countries): Port 3124`);
   console.log(`👄 Solenoid Jaw: Binary ON/OFF Action`);
+  console.log(`🎬 YouTube Import: audio-only download for real lipsync`);
   console.log(`🌐 Open in Browser: http://localhost:${PORT}`);
 
   const nets = lanAddresses();
@@ -1140,7 +1542,15 @@ server.listen(PORT, () => {
 
   // Turn on the PIXY's built-in AI tracking automatically (via vendor HID,
   // so the EMEET app never has to run and never grabs the camera).
-  enablePixyTrackingOnStartup();
+  if (DAEMONS_ENABLED) enablePixyTrackingOnStartup();
+
+  // YouTube import needs yt-dlp; find it now so the first paste is instant.
+  pruneYouTubeCache();
+  probeYtDlp().then((runner) => {
+    if (!runner) {
+      console.warn('[YouTube] yt-dlp not found — install it with: python -m pip install --user yt-dlp');
+    }
+  });
 });
 
 // Secure twin of the app, so a laptop or phone on the same network can talk to

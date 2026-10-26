@@ -131,6 +131,7 @@ function bindElements() {
     'quickCameraSelect', 'quickMicSelect', 'quickVoicePresetSelect',
     'conversationToggleBtn', 'talkBtnHeading', 'talkBtnSubtext',
     'musicDropZone', 'musicFileInput', 'musicChooseBtn', 'musicDropTitle', 'musicDropHint',
+    'musicYoutubeInput', 'musicYoutubeBtn', 'musicYoutubeHint', 'musicLibrary', 'musicLibraryList', 'musicLibraryRefresh',
     'musicPlayBtn', 'musicStopBtn', 'musicTimeLabel', 'musicSeek', 'musicVolume',
     'musicStatusBadge', 'musicJawFill', 'musicJawState', 'lipsyncToggle',
     'vuStatusDot', 'vuLevelLabel', 'mainTestMicBtn', 'micStateBadge', 'vuLedLadder',
@@ -1472,6 +1473,8 @@ const music = {
   raf: null,
   name: '',
   objectUrl: null,
+  sourceKind: 'file',
+  trackId: null,
   loaded: false,
   jawOpen: false,
   lastToggleAt: 0,
@@ -1642,6 +1645,67 @@ function resetMusicUI() {
   updateMusicButtons();
 }
 
+// One <audio> element is reused for every track, so the Web Audio graph (and
+// therefore the analyser feeding the jaw) only ever has to be built once.
+function ensureMusicAudioElement() {
+  if (music.audio) return music.audio;
+
+  music.audio = new Audio();
+  music.audio.preload = 'auto';
+  music.audio.crossOrigin = 'anonymous';
+  music.audio.addEventListener('timeupdate', updateMusicTime);
+  music.audio.addEventListener('durationchange', updateMusicTime);
+  music.audio.addEventListener('ended', onMusicEnded);
+  music.audio.addEventListener('error', () => {
+    music.loaded = false;
+    updateMusicButtons();
+    setMusicBadge('Could not load', 'status-warn');
+    showToast('⚠️ Could not decode that audio file. Try a standard MP3.');
+  });
+  return music.audio;
+}
+
+// Shared by local files and YouTube imports: point the player at a source and
+// update every bit of card UI that describes "what is loaded".
+function setMusicTrack({ name, src, objectUrl = null, sourceKind = 'file', trackId = null, toast = true }) {
+  stopMusic({ silent: true });
+
+  ensureMusicAudioElement();
+
+  if (music.objectUrl && music.objectUrl !== objectUrl) {
+    URL.revokeObjectURL(music.objectUrl);
+  }
+  music.objectUrl = objectUrl;
+  music.sourceKind = sourceKind;
+  music.trackId = trackId;
+  music.name = name;
+
+  music.audio.src = src;
+  applyMusicVolume();
+  music.audio.load();
+
+  music.loaded = true;
+  music.peak = 0.08;
+  music.envelope = 0;
+
+  if (els.musicDropZone) els.musicDropZone.classList.add('has-track');
+  if (els.musicDropTitle) {
+    els.musicDropTitle.textContent = sourceKind === 'youtube' ? `🎬 ${name}` : `🎵 ${name}`;
+  }
+  if (els.musicDropHint) {
+    els.musicDropHint.textContent = sourceKind === 'youtube'
+      ? 'Downloaded to this PC — press ▶️ Play and Buckley will lipsync to the real audio.'
+      : 'Ready to play — press ▶️ Play and Buckley will lipsync.';
+  }
+
+  updateMusicButtons();
+  setMusicBadge('Loaded', 'status-ok');
+  highlightLibraryTrack();
+  if (toast) {
+    showToast(`🎵 Loaded "${name}" — press Play to make Buckley sing along.`);
+  }
+}
+
 function loadMusicFile(file) {
   if (!file) return;
 
@@ -1653,46 +1717,27 @@ function loadMusicFile(file) {
     return;
   }
 
-  stopMusic({ silent: true });
-
-  if (music.objectUrl) {
-    URL.revokeObjectURL(music.objectUrl);
-    music.objectUrl = null;
-  }
-
-  if (!music.audio) {
-    music.audio = new Audio();
-    music.audio.preload = 'auto';
-    music.audio.crossOrigin = 'anonymous';
-    music.audio.addEventListener('timeupdate', updateMusicTime);
-    music.audio.addEventListener('durationchange', updateMusicTime);
-    music.audio.addEventListener('ended', onMusicEnded);
-    music.audio.addEventListener('error', () => {
-      music.loaded = false;
-      updateMusicButtons();
-      setMusicBadge('Could not load', 'status-warn');
-      showToast('⚠️ Could not decode that audio file. Try a standard MP3.');
-    });
-  }
-
-  music.name = (file.name || 'song').replace(/\.[^.]+$/, '');
-  music.objectUrl = URL.createObjectURL(file);
-  music.audio.src = music.objectUrl;
-  applyMusicVolume();
-  music.audio.load();
-
-  music.loaded = true;
-  music.peak = 0.08;
-  music.envelope = 0;
-
-  if (els.musicDropZone) els.musicDropZone.classList.add('has-track');
-  if (els.musicDropTitle) els.musicDropTitle.textContent = `🎵 ${music.name}`;
-  if (els.musicDropHint) els.musicDropHint.textContent = 'Ready to play — press ▶️ Play and Buckley will lipsync.';
-
-  updateMusicButtons();
-  setMusicBadge('Loaded', 'status-ok');
-  showToast(`🎵 Loaded "${music.name}" — press Play to make Buckley sing along.`);
+  const objectUrl = URL.createObjectURL(file);
+  setMusicTrack({
+    name: (file.name || 'song').replace(/\.[^.]+$/, ''),
+    src: objectUrl,
+    objectUrl,
+    sourceKind: 'file'
+  });
 }
+
+function loadYouTubeTrack(track, { toast = true } = {}) {
+  if (!track || !track.url) return;
+  setMusicTrack({
+    name: track.title || track.id,
+    src: track.url,
+    objectUrl: null,
+    sourceKind: 'youtube',
+    trackId: track.id,
+    toast
+  });
+}
+
 
 async function playMusic() {
   if (!music.audio || !music.loaded) return;
@@ -1782,6 +1827,197 @@ function toggleMusicPlayback() {
   else playMusic();
 }
 
+// ============================================================================
+// YOUTUBE IMPORT UI
+// The wall PC does the download (yt-dlp), so a visitor on a phone can paste a
+// link and Buckley sings it with the same real-envelope jaw as a local MP3.
+// ============================================================================
+let ytImportBusy = false;
+let ytLibraryTracks = [];
+
+function setYouTubeBusy(busy, label = 'Importing…') {
+  if (els.musicYoutubeBtn) {
+    els.musicYoutubeBtn.disabled = busy;
+    els.musicYoutubeBtn.textContent = busy ? `⏳ ${label}` : '🎬 Import YouTube';
+  }
+  if (els.musicYoutubeInput) els.musicYoutubeInput.disabled = busy;
+}
+
+function setYouTubeHint(text, isError = false) {
+  if (!els.musicYoutubeHint) return;
+  const message = String(text || '').trim();
+  els.musicYoutubeHint.textContent = message;
+  els.musicYoutubeHint.classList.toggle('is-error', Boolean(isError));
+  els.musicYoutubeHint.classList.toggle('hidden', message === '');
+}
+
+function highlightLibraryTrack() {
+  if (!els.musicLibraryList) return;
+  els.musicLibraryList.querySelectorAll('.music-lib-item').forEach((item) => {
+    item.classList.toggle('is-active', Boolean(music.trackId) && item.dataset.trackId === music.trackId);
+  });
+}
+
+function renderYouTubeLibrary() {
+  if (!els.musicLibrary || !els.musicLibraryList) return;
+
+  els.musicLibraryList.textContent = '';
+
+  if (!ytLibraryTracks.length) {
+    els.musicLibrary.classList.add('hidden');
+    return;
+  }
+  els.musicLibrary.classList.remove('hidden');
+
+  ytLibraryTracks.forEach((track) => {
+    const li = document.createElement('li');
+    li.className = 'music-lib-item';
+    li.dataset.trackId = track.id;
+    li.title = `Play "${track.title}"`;
+    li.addEventListener('click', () => {
+      loadYouTubeTrack(track);
+      showToast(`🎬 Loaded "${track.title}" — press Play.`);
+    });
+
+    const icon = document.createElement('span');
+    icon.className = 'music-lib-icon';
+    icon.textContent = '▶';
+
+    const text = document.createElement('div');
+    text.className = 'music-lib-text';
+
+    const title = document.createElement('span');
+    title.className = 'music-lib-title';
+    title.textContent = track.title;
+
+    const meta = document.createElement('span');
+    meta.className = 'music-lib-meta';
+    const bits = [formatTrackTime(track.duration)];
+    if (track.uploader) bits.push(track.uploader);
+    meta.textContent = bits.join(' • ');
+
+    text.append(title, meta);
+
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'music-lib-delete';
+    remove.textContent = '✕';
+    remove.title = 'Delete this download from the wall PC';
+    remove.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await removeYouTubeTrack(track);
+    });
+
+    li.append(icon, text, remove);
+    els.musicLibraryList.appendChild(li);
+  });
+
+  highlightLibraryTrack();
+}
+
+async function refreshYouTubeLibrary() {
+  try {
+    const res = await fetch('/api/youtube/tracks', { cache: 'no-store' });
+    if (!res.ok) return;
+    const data = await res.json();
+    ytLibraryTracks = Array.isArray(data.tracks) ? data.tracks : [];
+    renderYouTubeLibrary();
+    if (data.ytDlpAvailable === false) {
+      setYouTubeHint('yt-dlp is not installed on the wall PC. Run: python -m pip install --user yt-dlp', true);
+    }
+  } catch {
+    // Library is a convenience — the player still works without it.
+  }
+}
+
+async function removeYouTubeTrack(track) {
+  const ok = window.confirm(`Delete "${track.title}" from the wall PC's YouTube cache?`);
+  if (!ok) return;
+
+  try {
+    const res = await fetch('/api/youtube/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: track.id })
+    });
+    if (!res.ok) throw new Error('The wall PC could not delete that file.');
+
+    if (music.trackId === track.id) {
+      stopMusic({ silent: true });
+      if (music.audio) {
+        music.audio.removeAttribute('src');
+        music.audio.load();
+      }
+      music.loaded = false;
+      music.trackId = null;
+      resetMusicUI();
+    }
+    showToast(`🗑️ Removed "${track.title}".`);
+    await refreshYouTubeLibrary();
+  } catch (err) {
+    showToast(`⚠️ ${err.message}`);
+  }
+}
+
+async function importYouTubeLink() {
+  if (ytImportBusy) return;
+
+  const raw = (els.musicYoutubeInput?.value || '').trim();
+  if (!raw) {
+    showToast('🎬 Paste a YouTube link first.');
+    els.musicYoutubeInput?.focus();
+    return;
+  }
+
+  ytImportBusy = true;
+  setYouTubeBusy(true, 'Downloading…');
+  setYouTubeHint('Downloading the audio track from YouTube… this usually takes a few seconds.');
+  setMusicBadge('Importing…', 'status-neutral');
+
+  try {
+    const res = await fetch('/api/youtube/load', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: raw })
+    });
+
+    let data = {};
+    try {
+      data = await res.json();
+    } catch {}
+
+    if (!res.ok || !data.ok) {
+      if (data.code === 'NO_YTDLP') {
+        setYouTubeHint('yt-dlp is not installed on the wall PC. Run: python -m pip install --user yt-dlp', true);
+      } else {
+        setYouTubeHint(data.error || `Import failed (HTTP ${res.status}).`, true);
+      }
+      setMusicBadge('Import failed', 'status-warn');
+      showToast(`⚠️ ${data.error || 'Could not import that YouTube link.'}`);
+      return;
+    }
+
+    const track = data.track;
+    loadYouTubeTrack(track, { toast: false });
+
+    if (els.musicYoutubeInput) els.musicYoutubeInput.value = '';
+    setYouTubeHint('');
+    setMusicBadge(data.cached ? 'Loaded from cache' : 'Imported', 'status-ok');
+    showToast(data.cached
+      ? `🎬 "${track.title}" was already downloaded — loaded it instantly.`
+      : `🎬 Imported "${track.title}" — press Play to make Buckley sing.`);
+
+    await refreshYouTubeLibrary();
+  } catch (err) {
+    setYouTubeHint('Could not reach the wall PC. Is the server still running?', true);
+    setMusicBadge('Import failed', 'status-warn');
+    showToast(`⚠️ ${err.message}`);
+  } finally {
+    ytImportBusy = false;
+    setYouTubeBusy(false);
+  }
+}
+
 function initMusicPlayer() {
   if (!els.musicDropZone) return;
 
@@ -1835,6 +2071,21 @@ function initMusicPlayer() {
     updateMusicTime();
   });
   els.musicSeek?.addEventListener('change', () => { music.seeking = false; });
+
+  // YouTube import: button, Enter key, and the cached-track library
+  els.musicYoutubeBtn?.addEventListener('click', importYouTubeLink);
+  els.musicYoutubeInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      importYouTubeLink();
+    }
+  });
+  els.musicLibraryRefresh?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    refreshYouTubeLibrary();
+    showToast('🔄 Refreshed the YouTube cache list.');
+  });
+  refreshYouTubeLibrary();
 
   els.lipsyncToggle?.addEventListener('change', () => {
     applyJawState();

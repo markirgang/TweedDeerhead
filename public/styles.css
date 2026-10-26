@@ -1210,6 +1210,156 @@ body {
 }
 
 /* ============================================================================
+   YOUTUBE IMPORT ROW + IMPORTED-TRACK LIBRARY
+   ============================================================================ */
+.music-youtube {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.music-youtube-input {
+  flex: 1 1 260px;
+  min-width: 0;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border-wood);
+  border-radius: 8px;
+  background: #120d08;
+  color: var(--text-main);
+  font-size: 0.85rem;
+  font-family: Consolas, monospace;
+}
+
+.music-youtube-input::placeholder {
+  color: #7a6a58;
+  font-family: inherit;
+}
+
+.music-youtube-input:focus {
+  outline: none;
+  border-color: var(--amber-accent);
+}
+
+.music-youtube-input:disabled {
+  opacity: 0.6;
+}
+
+.music-youtube-hint {
+  margin: -0.35rem 0 0 0;
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+.music-youtube-hint.is-error {
+  color: #ff8a6b;
+}
+
+.music-library {
+  border: 1px solid var(--border-wood);
+  border-radius: 10px;
+  background: #120d08;
+  padding: 0.6rem 0.7rem;
+}
+
+.music-library-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.music-library-list {
+  list-style: none;
+  margin: 0.5rem 0 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-height: 190px;
+  overflow-y: auto;
+}
+
+.music-lib-item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.music-lib-item:hover {
+  background: #1b1409;
+  border-color: var(--border-wood);
+}
+
+.music-lib-item.is-active {
+  border-color: rgba(56, 239, 125, 0.5);
+  background: #14200f;
+}
+
+.music-lib-icon {
+  font-size: 0.95rem;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+
+.music-lib-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.music-lib-title {
+  display: block;
+  font-size: 0.82rem;
+  color: var(--text-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-lib-meta {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-family: Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-lib-delete {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 0.15rem 0.3rem;
+  border-radius: 5px;
+  line-height: 1;
+}
+
+.music-lib-delete:hover {
+  color: #ff8a6b;
+  background: rgba(255, 138, 107, 0.12);
+}
+
+.music-lib-empty {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  padding: 0.3rem 0.1rem;
+  font-style: italic;
+}
+
+/* ============================================================================
    MICROPHONE SOURCE (wall PC vs the computer viewing the page)
    ============================================================================ */
 .mic-source-row {

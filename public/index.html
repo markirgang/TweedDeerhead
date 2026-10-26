@@ -166,6 +166,22 @@
           <button type="button" id="musicChooseBtn" class="btn btn-amber btn-sm">📂 Choose MP3</button>
         </div>
 
+        <div class="music-youtube">
+          <input type="text" id="musicYoutubeInput" class="music-youtube-input"
+                 placeholder="Paste a YouTube link — youtu.be/… or youtube.com/watch?v=…"
+                 autocomplete="off" spellcheck="false" />
+          <button type="button" id="musicYoutubeBtn" class="btn btn-amber btn-sm">🎬 Import YouTube</button>
+        </div>
+        <p class="sub-label music-youtube-hint hidden" id="musicYoutubeHint"></p>
+
+        <div class="music-library hidden" id="musicLibrary">
+          <div class="music-library-head">
+            <span>📼 Imported from YouTube</span>
+            <button type="button" id="musicLibraryRefresh" class="btn btn-ghost btn-sm">↻ Refresh</button>
+          </div>
+          <ul class="music-library-list" id="musicLibraryList"></ul>
+        </div>
+
         <div class="music-controls">
           <button type="button" id="musicPlayBtn" class="btn btn-amber btn-sm" disabled>▶ Play</button>
           <button type="button" id="musicStopBtn" class="btn btn-sm" disabled>■ Stop</button>

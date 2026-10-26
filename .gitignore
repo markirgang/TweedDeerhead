@@ -15,3 +15,6 @@ voices/*.onnx.json
 # Generated local HTTPS certificate + its password (never commit a private key)
 certs/
 
+# YouTube audio downloaded by the import feature (re-downloadable, can be large)
+cache/
+
