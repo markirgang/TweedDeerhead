@@ -1051,6 +1051,26 @@ const requestHandler = async (req, res) => {
     return sendJson(res, 200, networkInfo(req));
   }
 
+  // ---------------------------------------------------------------------
+  // Self-signed certificate download, so LAN visitors can install it
+  // before visiting the HTTPS port (required for microphone access).
+  // ---------------------------------------------------------------------
+  if (pathname === '/cert' && req.method === 'GET') {
+    const cerPath = path.join(CERT_DIR, 'tweed-deerhead.cer');
+    if (!fs.existsSync(cerPath)) {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      return res.end('Certificate not yet generated. Wait a moment and try again.');
+    }
+    const stats = fs.statSync(cerPath);
+    res.writeHead(200, {
+      'Content-Type': 'application/x-x509-ca-cert',
+      'Content-Disposition': 'attachment; filename="tweed-deerhead.cer"',
+      'Content-Length': stats.size,
+      'Cache-Control': 'no-store'
+    });
+    return fs.createReadStream(cerPath).pipe(res);
+  }
+
   // Proxy live EMEET PIXY camera frame from Python DirectShow bridge
   if (pathname === '/api/camera/frame' && req.method === 'GET') {
     const camIdx = parsedUrl.searchParams.get('cam') || '0';

@@ -56,6 +56,9 @@ pixy_idx = find_pixy_idx()
 print(f"[PixyMic] Verified EMEET PIXY audio input device index: {pixy_idx}", flush=True)
 
 current_vu_level = 0
+# Sensitivity multiplier: higher = more sensitive (lower thresholds)
+# Range: 0.1 to 5.0, default 1.0
+mic_sensitivity = 1.0
 lock = threading.Lock()
 
 def audio_monitor_loop():
@@ -89,6 +92,15 @@ class MicHandler(BaseHTTPRequestHandler):
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             self.wfile.write(data)
+        elif self.path == '/sensitivity':
+            with lock:
+                sens = mic_sensitivity
+            data = json.dumps({"sensitivity": sens}).encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(data)
         else:
             self.send_response(404)
             self.end_headers()
@@ -112,10 +124,20 @@ class MicHandler(BaseHTTPRequestHandler):
             self.handle_transcribe()
             return
 
+        if self.path == '/sensitivity':
+            self.handle_set_sensitivity()
+            return
+
         if self.path == '/listen':
             sr_rate = 44100
             max_seconds = 4.0
             total_samples = int(max_seconds * sr_rate)
+
+            # Apply sensitivity to VU thresholds
+            with lock:
+                sens = mic_sensitivity
+            speech_threshold = max(1, 6 / sens)
+            silence_threshold = max(0.5, 5 / sens)
 
             try:
                 rec_data = sd.rec(total_samples, samplerate=sr_rate, channels=1, dtype='int16', device=pixy_idx)
@@ -127,10 +149,10 @@ class MicHandler(BaseHTTPRequestHandler):
                     time.sleep(0.1)
                     with lock:
                         curr = current_vu_level
-                    if curr > 6:
+                    if curr > speech_threshold:
                         heard_speech = True
                         silence_chunks = 0
-                    elif heard_speech and curr <= 5:
+                    elif heard_speech and curr <= silence_threshold:
                         silence_chunks += 1
                         # If user spoke and paused for ~0.4s, stop immediately and return!
                         if silence_chunks >= 4:
@@ -170,6 +192,26 @@ class MicHandler(BaseHTTPRequestHandler):
         else:
             self.send_response(404)
             self.end_headers()
+
+    def handle_set_sensitivity(self):
+        global mic_sensitivity
+        try:
+            length = int(self.headers.get('Content-Length') or 0)
+            if length <= 0:
+                return self._json(400, {"ok": False, "error": "empty body"})
+            raw = self.rfile.read(length)
+            data = json.loads(raw.decode('utf-8'))
+            sens = float(data.get('sensitivity', 1.0))
+            # Clamp to reasonable range
+            sens = max(0.1, min(5.0, sens))
+            with lock:
+                mic_sensitivity = sens
+                # Also adjust recognizer's energy threshold
+                recognizer.energy_threshold = 140 / sens
+            print(f"[PixyMic] Mic sensitivity set to {sens:.2f} (energy_threshold={recognizer.energy_threshold:.1f})", flush=True)
+            return self._json(200, {"ok": True, "sensitivity": sens})
+        except Exception as e:
+            return self._json(400, {"ok": False, "error": str(e)})
 
     def handle_transcribe(self):
         try:
