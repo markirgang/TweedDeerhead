@@ -165,6 +165,32 @@ def _hz(value, span=60):
     return f'{delta:+d}Hz'
 
 
+def edge_audio_to_wav(audio):
+    """Convert Edge's MP3 to WAV so the wall PC's speaker can play it."""
+    import subprocess
+    import tempfile
+
+    ffmpeg = os.environ.get('FFMPEG_PATH') or r'C:\Users\marki\AppData\Local\ffmpeg\ffmpeg-master-latest-win64-gpl\bin\ffmpeg.exe'
+    if not os.path.exists(ffmpeg):
+        raise RuntimeError('ffmpeg is required to play neural voices on the wall speaker')
+
+    with tempfile.TemporaryDirectory() as folder:
+        source = os.path.join(folder, 'voice.mp3')
+        target = os.path.join(folder, 'voice.wav')
+        with open(source, 'wb') as fh:
+            fh.write(audio)
+        result = subprocess.run(
+            [ffmpeg, '-y', '-hide_banner', '-loglevel', 'error', '-i', source, target],
+            capture_output=True,
+            timeout=20,
+        )
+        if result.returncode != 0 or not os.path.exists(target):
+            detail = result.stderr.decode('utf-8', 'replace').strip()
+            raise RuntimeError(detail or 'could not convert neural voice audio')
+        with open(target, 'rb') as fh:
+            return fh.read()
+
+
 def synth_edge(text, short_name, rate, pitch):
     if not EDGE_AVAILABLE:
         raise RuntimeError('edge-tts is not installed')
@@ -185,7 +211,7 @@ def synth_edge(text, short_name, rate, pitch):
     audio = asyncio.run(_run())
     if not audio:
         raise RuntimeError('Microsoft returned no audio')
-    return audio, 'audio/mpeg'
+    return edge_audio_to_wav(audio), 'audio/wav'
 
 
 # ---------------------------------------------------------------------------

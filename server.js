@@ -616,6 +616,12 @@ let wallLastPlayedAt = null;
 let pixyListenQueue = Promise.resolve();
 let lastBrowserPixyListenAt = 0;
 let wallBrowserMusicUntil = 0;
+let wallVoiceSettings = {
+  voiceName: 'Microsoft David Desktop',
+  rate: 1.05,
+  pitch: 0.88,
+  volume: 100
+};
 
 function wallSleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -623,22 +629,19 @@ function wallSleep(ms) {
 
 // Play on the physical wall PC, independently of browser audio. Calls are
 // queued so two replies never talk over one another on the headphone speaker.
-function queueWallSpeech(text, { voiceName = 'Microsoft David Desktop', rate = 1.05, volume = 100 } = {}) {
+function queueWallSpeech(text, { voiceName = 'Microsoft David Desktop', rate = 1.05, pitch = 0.88, volume = 100, audioDataUrl = null } = {}) {
   const cleanText = String(text || '').trim();
-  if (!WALL_AUDIO_ENABLED || !cleanText) return Promise.resolve();
+  if (!WALL_AUDIO_ENABLED || (!cleanText && !audioDataUrl)) return Promise.resolve();
 
   const play = async () => {
     wallSpeechActive += 1;
     wallSpeechEpoch += 1; // captures that overlap this playback are discarded
     try {
-      const psRate = Math.max(-5, Math.min(5, Math.round((Number(rate) - 1.0) * 6)));
-      const psVol = Math.max(0, Math.min(100, Math.round(Number(volume))));
+      audioDataUrl = audioDataUrl || await synthesizeSpeech({ text: cleanText, voiceName, rate, pitch, volume });
       const result = await ttsDaemon.send({
-        action: 'speak',
-        text: cleanText,
-        voiceName: normalizeSapiVoice(voiceName),
-        rate: psRate,
-        volume: psVol
+        action: 'play',
+        audioDataUrl,
+        volume
       }, 45000);
       if (!result || result.ok === false) throw new Error(result?.error || 'wall speaker failed');
     } catch (err) {
@@ -753,9 +756,10 @@ async function wallMicLoop() {
       const result = await postWallChat({
         provider: 'gemini',
         model: 'gemini-3.8-flash',
-        voiceName: 'Microsoft David Desktop',
-        rate: 1.05,
-        volume: 100,
+        voiceName: wallVoiceSettings.voiceName,
+        rate: wallVoiceSettings.rate,
+        pitch: wallVoiceSettings.pitch,
+        volume: wallVoiceSettings.volume,
         userMessage: heard,
         imageBase64,
         visionSummary: 'A visitor is speaking in the room through the always-on EMEET PIXY microphone at 121 Tweed Blvd.',
@@ -1366,6 +1370,21 @@ const requestHandler = async (req, res) => {
 
   // A wall-PC browser tells the backend when local music is playing, so the
   // always-on PIXY listener never mistakes the song for a visitor.
+  if (pathname === '/api/wall/voice' && req.method === 'POST') {
+    try {
+      const body = await parseBody(req);
+      wallVoiceSettings = {
+        voiceName: String(body.voiceName || wallVoiceSettings.voiceName),
+        rate: Number(body.rate) || wallVoiceSettings.rate,
+        pitch: Number(body.pitch) || wallVoiceSettings.pitch,
+        volume: Number(body.volume ?? wallVoiceSettings.volume)
+      };
+      return sendJson(res, 200, { ok: true, voice: wallVoiceSettings });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, error: err.message });
+    }
+  }
+
   if (pathname === '/api/wall/music' && req.method === 'POST') {
     try {
       const body = await parseBody(req);
@@ -1595,14 +1614,18 @@ const requestHandler = async (req, res) => {
           pitch: body.pitch || 0.88,
           volume: body.volume ?? 100
         });
-      } catch {}
+      } catch (err) {
+        console.warn(`[VoiceBank] Could not synthesize "${body.voiceName || 'default voice'}": ${err.message}`);
+      }
 
       // The physical wall speaker mirrors every reply, including conversations
       // started by remote visitors. The wall-PC browser mutes its own copy.
       queueWallSpeech(reply, {
         voiceName: body.voiceName,
         rate: body.rate,
-        volume: body.volume
+        pitch: body.pitch,
+        volume: body.volume,
+        audioDataUrl
       });
 
       return sendJson(res, 200, {

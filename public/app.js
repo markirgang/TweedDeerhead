@@ -92,7 +92,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   await Promise.all([
     refreshWindows11HardwareList(false),
     checkBackendGeminiStatus(),
-    loadVoiceBank(),
+    loadVoiceBank().then(reportWallVoice),
     initMicSourceUI(),
     initBrowserSpeakerUI()
   ]);
@@ -350,6 +350,26 @@ function bindElements() {
   });
 }
 
+let wallVoiceReportTimer = null;
+function reportWallVoice() {
+  if (!isWallPc()) return;
+  const payload = {
+    voiceName: state.settings.voiceURI,
+    rate: state.settings.rate,
+    pitch: state.settings.pitch,
+    volume: state.settings.volume
+  };
+  const send = () => fetch('/api/wall/voice', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }).catch(() => {});
+
+  if (wallVoiceReportTimer) clearInterval(wallVoiceReportTimer);
+  send();
+  wallVoiceReportTimer = setInterval(send, 15000);
+}
+
 function applyVoicePreset(presetKey) {
   const p = VOICE_PRESETS[presetKey];
   if (!p) return;
@@ -369,6 +389,7 @@ function applyVoicePreset(presetKey) {
   if (els.voiceRateRange) els.voiceRateRange.value = p.rate;
   if (els.rateVal) els.rateVal.textContent = p.rate.toFixed(2);
 
+  reportWallVoice();
   showToast(`🗣️ Voice preset: ${p.label}`);
 }
 
@@ -475,6 +496,7 @@ function applySelectedVoice(voiceId) {
   state.settings.voicePreset = '';
   localStorage.setItem('tweed_voiceURI', voiceId);
   localStorage.setItem('tweed_voicePreset', '');
+  reportWallVoice();
 
   const neural = VOICE_BANK.find(v => v.id === voiceId);
   if (neural) {

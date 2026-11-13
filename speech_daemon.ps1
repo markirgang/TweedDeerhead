@@ -73,6 +73,26 @@ while ($true) {
       } | ConvertTo-Json -Compress
       Write-Output $out
     }
+    elseif ($cmd.action -eq 'play') {
+      # Play a neural or Windows voice recording through the wall PC's default
+      # headphone-jack speaker, preserving the visitor's selected voice.
+      $audio = [string]$cmd.audioDataUrl
+      $comma = $audio.IndexOf(',')
+      if ($comma -lt 0) { throw 'No audio data supplied for wall playback.' }
+      $bytes = [Convert]::FromBase64String($audio.Substring($comma + 1))
+      $temp = Join-Path $env:TEMP ("tweed-wall-{0}.audio" -f [Guid]::NewGuid().ToString('N'))
+      [IO.File]::WriteAllBytes($temp, $bytes)
+      try {
+        $player = New-Object System.Media.SoundPlayer($temp)
+        $player.Load()
+        $player.PlaySync()
+        $player.Dispose()
+      } finally {
+        Remove-Item $temp -Force -ErrorAction SilentlyContinue
+      }
+      $out = @{ id = $id; ok = $true; played = $true } | ConvertTo-Json -Compress
+      Write-Output $out
+    }
     elseif ($cmd.action -eq 'speak') {
       # Play through the wall PC's Windows default output (the headphone-jack
       # speaker), independently of any browser's selected speaker.
