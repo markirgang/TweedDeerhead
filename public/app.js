@@ -42,6 +42,7 @@ const state = {
     micId: localStorage.getItem('tweed_micId') || 'mic-pixy',
     micSource: localStorage.getItem('tweed_micSource') || '',
     speakerId: localStorage.getItem('tweed_speakerId') || '',
+    browserSpeakerId: localStorage.getItem('tweed_browserSpeakerId') || 'default',
     voicePreset: localStorage.getItem('tweed_voicePreset') || 'witty-trail',
     voiceURI: localStorage.getItem('tweed_voiceURI') || 'Microsoft David Desktop',
     resolution: localStorage.getItem('tweed_resolution') || '640x480',
@@ -92,7 +93,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     refreshWindows11HardwareList(false),
     checkBackendGeminiStatus(),
     loadVoiceBank(),
-    initMicSourceUI()
+    initMicSourceUI(),
+    initBrowserSpeakerUI()
   ]);
 
   // 3. Start Live Video & AI vision loop
@@ -143,7 +145,7 @@ function bindElements() {
     'micSelect', 'micLevelBar', 'micStatusText', 'testMicBtn',
     'micSourceSelect', 'micSourceSelectHw', 'micSourceHint', 'micHttpsBanner', 'micHttpsLink',
     'vuTitleText',
-    'speakerSelect', 'voiceSelect', 'hwSystemVoicesGroup',
+    'speakerSelect', 'browserSpeakerSelect', 'browserSpeakerHint', 'voiceSelect', 'hwSystemVoicesGroup',
     'voicePitchRange', 'pitchVal', 'voiceRateRange', 'rateVal',
     'speakerVolumeRange', 'volVal', 'testSpeakerBtn',
     'win11OsBanner', 'win11DeviceList',
@@ -860,6 +862,8 @@ async function ensureBrowserMic() {
       }
 
       updateMicSourceUI();
+      // Microphone permission also unlocks speaker names in most browsers.
+      refreshBrowserSpeakers();
       return true;
     } catch (err) {
       browserMic.ready = false;
@@ -1327,7 +1331,7 @@ async function triggerDeerVisionResponse(promptText) {
 
     // Play pre-synthesized audio with binary solenoid jaw clack!
     if (data.audioDataUrl) {
-      await playAudioWav(data.audioDataUrl);
+      await playAudioWav(data.audioDataUrl, { silent: isWallPc() && data.wallPlayback });
     } else {
       await speakAsDeerhead(reply);
     }
@@ -1366,7 +1370,7 @@ function escapeHtml(str) {
 // ============================================================================
 // SPEECH SYNTHESIS & BINARY ON/OFF SOLENOID JAW CLAPPER
 // ============================================================================
-async function playAudioWav(audioDataUrl) {
+async function playAudioWav(audioDataUrl, { silent = false } = {}) {
   stopDeerSpeech();
   // The jaw can only do one thing at a time: if Buckley was lipsyncing a song,
   // pause it so the speech clapper owns the solenoid.
@@ -1376,9 +1380,12 @@ async function playAudioWav(audioDataUrl) {
   startBinarySolenoidJawClapper();
 
   const audio = new Audio(audioDataUrl);
-  audio.volume = Math.max(0, Math.min(1, state.settings.volume / 100));
+  // On the wall PC the backend plays the physical headphone speaker. Keep this
+  // element silent so the visitor hears one voice, while its duration drives the jaw.
+  audio.volume = silent ? 0 : Math.max(0, Math.min(1, state.settings.volume / 100));
   audio.playbackRate = state.settings.rate;
   state.currentAudio = audio;
+  await setAudioElementOutput(audio);
 
   await new Promise((resolve) => {
     audio.onended = resolve;
@@ -1410,7 +1417,7 @@ async function speakAsDeerhead(text) {
     });
     const data = await res.json();
     if (data.ok && data.audioDataUrl) {
-      await playAudioWav(data.audioDataUrl);
+      await playAudioWav(data.audioDataUrl, { silent: isWallPc() && data.wallPlayback });
     }
   } catch (err) {
     console.warn('TTS error:', err);
@@ -1533,6 +1540,7 @@ function ensureMusicGraph() {
   if (!AudioCtx || !music.audio) return false;
 
   music.ctx = new AudioCtx();
+  setAudioContextOutput(music.ctx);
   music.source = music.ctx.createMediaElementSource(music.audio);
   music.analyser = music.ctx.createAnalyser();
   music.analyser.fftSize = 1024;
@@ -1653,6 +1661,7 @@ function ensureMusicAudioElement() {
   music.audio = new Audio();
   music.audio.preload = 'auto';
   music.audio.crossOrigin = 'anonymous';
+  setAudioElementOutput(music.audio);
   music.audio.addEventListener('timeupdate', updateMusicTime);
   music.audio.addEventListener('durationchange', updateMusicTime);
   music.audio.addEventListener('ended', onMusicEnded);
@@ -1739,6 +1748,23 @@ function loadYouTubeTrack(track, { toast = true } = {}) {
 }
 
 
+let wallMusicReportTimer = null;
+function reportWallMusic(playing) {
+  if (!isWallPc()) return;
+  const send = () => fetch('/api/wall/music', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ playing })
+  }).catch(() => {});
+
+  if (wallMusicReportTimer) {
+    clearInterval(wallMusicReportTimer);
+    wallMusicReportTimer = null;
+  }
+  send();
+  if (playing) wallMusicReportTimer = setInterval(send, 2000);
+}
+
 async function playMusic() {
   if (!music.audio || !music.loaded) return;
 
@@ -1751,6 +1777,7 @@ async function playMusic() {
   if (music.ctx && music.ctx.state === 'suspended') {
     try { await music.ctx.resume(); } catch {}
   }
+  await applyBrowserSpeaker(state.settings.browserSpeakerId, { notify: false });
 
   try {
     await music.audio.play();
@@ -1760,6 +1787,7 @@ async function playMusic() {
   }
 
   state.songPlaying = true;
+  reportWallMusic(true);
   startLipsyncLoop();
   setMusicBadge('Playing', 'status-ok');
   updateMusicButtons();
@@ -1771,6 +1799,7 @@ function pauseMusic() {
   if (!music.audio) return;
   music.audio.pause();
   state.songPlaying = false;
+  reportWallMusic(false);
   stopLipsyncLoop();
   setMusicBadge('Paused', 'status-neutral');
   updateMusicButtons();
@@ -1791,6 +1820,7 @@ function stopMusic({ silent = false } = {}) {
   music.audio.pause();
   try { music.audio.currentTime = 0; } catch {}
   state.songPlaying = false;
+  reportWallMusic(false);
   stopLipsyncLoop();
   updateMusicTime();
 
@@ -1810,6 +1840,7 @@ function stopMusic({ silent = false } = {}) {
 
 function onMusicEnded() {
   state.songPlaying = false;
+  reportWallMusic(false);
   stopLipsyncLoop();
   updateMusicButtons();
   updateMusicTime();
@@ -2598,6 +2629,150 @@ function captureWebcamFrame() {
   snapCanvas.height = img.naturalHeight;
   snapCtx.drawImage(img, 0, 0);
   return snapCanvas.toDataURL('image/jpeg', 0.8);
+}
+
+// ============================================================================
+// BROWSER SPEAKER SELECTION
+// Audio still plays in the visitor's browser; this chooses which of that
+// computer's outputs it uses. The Windows speaker picker above remains a
+// separate hardware-profile setting for the wall PC.
+// ============================================================================
+const browserAudio = { outputs: [] };
+
+function browserSinkSelectionSupported() {
+  const mediaSink = typeof HTMLMediaElement !== 'undefined' &&
+    typeof HTMLMediaElement.prototype.setSinkId === 'function';
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  const contextSink = Boolean(AudioCtx && typeof AudioCtx.prototype.setSinkId === 'function');
+  return mediaSink || contextSink;
+}
+
+function updateBrowserSpeakerHint() {
+  if (!els.browserSpeakerHint) return;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+    els.browserSpeakerHint.textContent = 'This browser will play Buckley through its system default speaker.';
+    return;
+  }
+  if (!browserSinkSelectionSupported()) {
+    els.browserSpeakerHint.textContent = 'This browser will use its system default speaker; choosing a different output requires a browser with audio-output selection support.';
+    return;
+  }
+
+  const count = browserAudio.outputs.filter(device => device.deviceId && device.deviceId !== 'default').length;
+  const namesHidden = browserAudio.outputs.some(device => !device.label);
+  const secureNote = namesHidden && !window.isSecureContext
+    ? ' Open the https address to see device names.'
+    : '';
+  els.browserSpeakerHint.textContent = `${count} speaker output(s) found on this computer. Buckley and music play through the selected device.${secureNote}`;
+}
+
+async function setAudioElementOutput(audio, deviceId = state.settings.browserSpeakerId) {
+  if (!audio || typeof audio.setSinkId !== 'function') return false;
+  try {
+    await audio.setSinkId(deviceId || 'default');
+    return true;
+  } catch (err) {
+    console.warn('[Audio] Could not select the browser speaker for a media element:', err);
+    return false;
+  }
+}
+
+async function setAudioContextOutput(ctx, deviceId = state.settings.browserSpeakerId) {
+  if (!ctx || typeof ctx.setSinkId !== 'function') return false;
+  try {
+    await ctx.setSinkId(deviceId || 'default');
+    return true;
+  } catch (err) {
+    console.warn('[Audio] Could not select the browser speaker for Web Audio:', err);
+    return false;
+  }
+}
+
+async function refreshBrowserSpeakers() {
+  const select = els.browserSpeakerSelect;
+  if (!select) return;
+
+  const wanted = state.settings.browserSpeakerId || 'default';
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+    browserAudio.outputs = [];
+    select.innerHTML = '<option value="default">🔊 System default speaker (this computer)</option>';
+    select.value = 'default';
+    select.disabled = true;
+    updateBrowserSpeakerHint();
+    return;
+  }
+
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    browserAudio.outputs = devices.filter(device => device.kind === 'audiooutput');
+    select.disabled = false;
+    select.innerHTML = '';
+
+    const defaultOption = document.createElement('option');
+    defaultOption.value = 'default';
+    defaultOption.textContent = '🔊 System default speaker (this computer)';
+    select.appendChild(defaultOption);
+
+    let unnamed = 0;
+    browserAudio.outputs.forEach(device => {
+      // The explicit default option already covers the browser's pseudo-device.
+      // A blank deviceId cannot be passed to setSinkId, so ignore it as well.
+      if (!device.deviceId || device.deviceId === 'default') return;
+      unnamed += 1;
+      const option = document.createElement('option');
+      option.value = device.deviceId;
+      option.textContent = `🔊 ${device.label || `Speaker output ${unnamed} (this computer)`}`;
+      select.appendChild(option);
+    });
+
+    const available = [...select.options].some(option => option.value === wanted);
+    const selected = available ? wanted : 'default';
+    select.value = selected;
+    if (selected !== wanted) {
+      await applyBrowserSpeaker(selected, { notify: false });
+    } else {
+      updateBrowserSpeakerHint();
+    }
+  } catch (err) {
+    console.warn('[Audio] Could not enumerate browser speakers:', err);
+    select.innerHTML = '<option value="default">🔊 System default speaker (this computer)</option>';
+    select.value = 'default';
+    if (els.browserSpeakerHint) {
+      els.browserSpeakerHint.textContent = 'Speaker list unavailable; Buckley will use this computer\'s system default speaker.';
+    }
+  }
+}
+
+async function applyBrowserSpeaker(deviceId, { notify = true } = {}) {
+  const selected = deviceId || 'default';
+  state.settings.browserSpeakerId = selected;
+  localStorage.setItem('tweed_browserSpeakerId', selected);
+  if (els.browserSpeakerSelect && els.browserSpeakerSelect.value !== selected) {
+    els.browserSpeakerSelect.value = selected;
+  }
+
+  const jobs = [];
+  if (state.currentAudio) jobs.push(setAudioElementOutput(state.currentAudio, selected));
+  if (music.audio) jobs.push(setAudioElementOutput(music.audio, selected));
+  if (music.ctx) jobs.push(setAudioContextOutput(music.ctx, selected));
+  await Promise.all(jobs);
+
+  updateBrowserSpeakerHint();
+  if (notify) {
+    const option = els.browserSpeakerSelect?.selectedOptions[0];
+    showToast(`🔊 Browser audio output: ${option ? option.textContent : 'System default speaker'}`);
+  }
+}
+
+async function initBrowserSpeakerUI() {
+  if (!els.browserSpeakerSelect) return;
+  els.browserSpeakerSelect.addEventListener('change', () => {
+    applyBrowserSpeaker(els.browserSpeakerSelect.value);
+  });
+  if (navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener === 'function') {
+    navigator.mediaDevices.addEventListener('devicechange', refreshBrowserSpeakers);
+  }
+  await refreshBrowserSpeakers();
 }
 
 // ============================================================================

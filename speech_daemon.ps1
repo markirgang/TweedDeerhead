@@ -73,6 +73,30 @@ while ($true) {
       } | ConvertTo-Json -Compress
       Write-Output $out
     }
+    elseif ($cmd.action -eq 'speak') {
+      # Play through the wall PC's Windows default output (the headphone-jack
+      # speaker), independently of any browser's selected speaker.
+      $vol = [Math]::Max(0, [Math]::Min(100, [int]$cmd.volume))
+      $rate = [Math]::Max(-5, [Math]::Min(5, [int]$cmd.rate))
+      $synth.Volume = $vol
+      $synth.Rate = $rate
+
+      if ($cmd.voiceName) {
+        $vMatch = $synth.GetInstalledVoices() | Where-Object {
+          $_.VoiceInfo.Name -like "*$($cmd.voiceName)*" -or $cmd.voiceName -like "*$($_.VoiceInfo.Name)*"
+        } | Select-Object -First 1
+        if ($vMatch) {
+          $synth.SelectVoice($vMatch.VoiceInfo.Name)
+        }
+      }
+
+      $synth.SetOutputToDefaultAudioDevice()
+      $synth.Speak([string]$cmd.text)
+      $synth.SetOutputToNull()
+
+      $out = @{ id = $id; ok = $true; played = $true } | ConvertTo-Json -Compress
+      Write-Output $out
+    }
     elseif ($cmd.action -eq 'listen') {
       if ($null -eq $rec) {
         $out = @{ id = $id; ok = $false; error = "No microphone recognition device available" } | ConvertTo-Json -Compress
@@ -95,6 +119,7 @@ while ($true) {
       Write-Output $out
     }
   } catch {
+    try { $synth.SetOutputToNull() } catch {}
     $errOut = @{
       id = $cmd.id
       ok = $false

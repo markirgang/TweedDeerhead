@@ -592,6 +592,202 @@ function normalizeSapiVoice(voiceName) {
   return id;
 }
 
+// ============================================================================
+// ALWAYS-ON WALL AUDIO
+// The PIXY mic and the wall PC's default headphone output remain active even
+// when a visitor selects their browser's mic/speaker. Browser captures are
+// serialized with the wall listener so two clients never open the PIXY at once.
+// ============================================================================
+const WALL_AUDIO_ENABLED = DAEMONS_ENABLED && process.env.TW_WALL_AUDIO !== '0';
+const wallAudio = {
+  loopStarted: false,
+  captureActive: false,
+  lastHeardAt: null,
+  lastTranscript: '',
+  lastReply: '',
+  lastError: '',
+  history: []
+};
+
+let wallSpeechQueue = Promise.resolve();
+let wallSpeechActive = 0;
+let wallSpeechEpoch = 0;
+let wallLastPlayedAt = null;
+let pixyListenQueue = Promise.resolve();
+let lastBrowserPixyListenAt = 0;
+let wallBrowserMusicUntil = 0;
+
+function wallSleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Play on the physical wall PC, independently of browser audio. Calls are
+// queued so two replies never talk over one another on the headphone speaker.
+function queueWallSpeech(text, { voiceName = 'Microsoft David Desktop', rate = 1.05, volume = 100 } = {}) {
+  const cleanText = String(text || '').trim();
+  if (!WALL_AUDIO_ENABLED || !cleanText) return Promise.resolve();
+
+  const play = async () => {
+    wallSpeechActive += 1;
+    wallSpeechEpoch += 1; // captures that overlap this playback are discarded
+    try {
+      const psRate = Math.max(-5, Math.min(5, Math.round((Number(rate) - 1.0) * 6)));
+      const psVol = Math.max(0, Math.min(100, Math.round(Number(volume))));
+      const result = await ttsDaemon.send({
+        action: 'speak',
+        text: cleanText,
+        voiceName: normalizeSapiVoice(voiceName),
+        rate: psRate,
+        volume: psVol
+      }, 45000);
+      if (!result || result.ok === false) throw new Error(result?.error || 'wall speaker failed');
+    } catch (err) {
+      console.warn(`[WallAudio] Headphone playback failed: ${err.message}`);
+    } finally {
+      wallSpeechActive = Math.max(0, wallSpeechActive - 1);
+      wallLastPlayedAt = Date.now();
+    }
+  };
+
+  wallSpeechQueue = wallSpeechQueue.then(play, play);
+  return wallSpeechQueue;
+}
+
+function requestPixyListen(owner = 'wall') {
+  const execute = async () => {
+    // A browser actively using the PIXY owns it briefly; the backend takes over
+    // automatically when that browser stops or switches to its own mic.
+    if (owner === 'wall' && Date.now() - lastBrowserPixyListenAt < 7000) {
+      return { ok: true, transcript: '', deferredToBrowser: true };
+    }
+
+    const ctrl = new AbortController();
+    const guard = setTimeout(() => ctrl.abort(), 30000);
+    try {
+      const res = await fetch('http://127.0.0.1:3123/listen', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: ctrl.signal
+      });
+      return await res.json();
+    } finally {
+      clearTimeout(guard);
+    }
+  };
+
+  const result = pixyListenQueue.then(execute, execute);
+  pixyListenQueue = result.catch(() => {});
+  return result;
+}
+
+async function captureWallFrame() {
+  const ctrl = new AbortController();
+  const guard = setTimeout(() => ctrl.abort(), 3500);
+  try {
+    const res = await fetch('http://127.0.0.1:3122/frame?cam=0', { signal: ctrl.signal });
+    if (!res.ok) return null;
+    const jpeg = Buffer.from(await res.arrayBuffer());
+    return `data:image/jpeg;base64,${jpeg.toString('base64')}`;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(guard);
+  }
+}
+
+async function postWallChat(payload) {
+  const ctrl = new AbortController();
+  const guard = setTimeout(() => ctrl.abort(), 60000);
+  try {
+    const res = await fetch(`http://127.0.0.1:${PORT}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: ctrl.signal
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `wall chat HTTP ${res.status}`);
+    return data;
+  } finally {
+    clearTimeout(guard);
+  }
+}
+
+async function wallMicLoop() {
+  await wallSleep(4000); // let the camera, mic and voice daemons finish starting
+  console.log('[WallAudio] PIXY microphone is always ON; headphone speaker mirroring is ON');
+
+  while (wallAudio.loopStarted) {
+    if (wallSpeechActive > 0 || Date.now() < wallBrowserMusicUntil) {
+      await wallSleep(250);
+      continue;
+    }
+
+    const playbackEpoch = wallSpeechEpoch;
+    wallAudio.captureActive = true;
+    try {
+      const data = await requestPixyListen('wall');
+      if (data.deferredToBrowser) {
+        await wallSleep(300);
+        continue;
+      }
+      if (playbackEpoch !== wallSpeechEpoch || wallSpeechActive > 0) continue;
+
+      const heard = String(data.transcript || '').trim();
+      if (!heard) {
+        await wallSleep(100);
+        continue;
+      }
+
+      const signature = heard.toLowerCase();
+      if (signature === wallAudio.lastTranscript.toLowerCase() && Date.now() - wallAudio.lastHeardAt < 7000) {
+        continue;
+      }
+
+      wallAudio.lastTranscript = heard;
+      wallAudio.lastHeardAt = Date.now();
+      wallAudio.lastError = '';
+      console.log(`[WallAudio] PIXY heard: "${heard}"`);
+
+      const imageBase64 = await captureWallFrame();
+      const result = await postWallChat({
+        provider: 'gemini',
+        model: 'gemini-3.8-flash',
+        voiceName: 'Microsoft David Desktop',
+        rate: 1.05,
+        volume: 100,
+        userMessage: heard,
+        imageBase64,
+        visionSummary: 'A visitor is speaking in the room through the always-on EMEET PIXY microphone at 121 Tweed Blvd.',
+        history: wallAudio.history,
+        clientScope: 'wall-backend'
+      });
+
+      wallAudio.lastReply = result.reply || '';
+      wallAudio.history.push({ role: 'user', content: heard });
+      wallAudio.history.push({ role: 'assistant', content: result.reply || '' });
+      if (wallAudio.history.length > 8) wallAudio.history = wallAudio.history.slice(-8);
+    } catch (err) {
+      wallAudio.lastError = err.message;
+      await wallSleep(1500);
+    } finally {
+      wallAudio.captureActive = false;
+    }
+
+    await wallSleep(100);
+  }
+}
+
+function startWallAudioLoop() {
+  if (!WALL_AUDIO_ENABLED || wallAudio.loopStarted) return;
+  wallAudio.loopStarted = true;
+  wallMicLoop().catch(err => {
+    wallAudio.loopStarted = false;
+    wallAudio.lastError = err.message;
+    console.warn(`[WallAudio] Listener stopped: ${err.message}`);
+  });
+}
+
 // Verify Google Gemini API Key and fetch available Gemini Vision models
 async function checkGeminiStatus(apiKey) {
   const cleanKey = (apiKey || process.env.GEMINI_API_KEY || '').trim();
@@ -1147,6 +1343,39 @@ const requestHandler = async (req, res) => {
     return sendJson(res, result.ok ? 200 : 500, result);
   }
 
+  // Always-on wall audio state, independent of any browser's selected devices.
+  if (pathname === '/api/wall/status' && req.method === 'GET') {
+    return sendJson(res, 200, {
+      enabled: WALL_AUDIO_ENABLED,
+      microphone: {
+        alwaysOn: WALL_AUDIO_ENABLED,
+        capturing: wallAudio.captureActive,
+        deferredToBrowser: Date.now() - lastBrowserPixyListenAt < 7000,
+        lastHeardAt: wallAudio.lastHeardAt,
+        lastTranscript: wallAudio.lastTranscript
+      },
+      speaker: {
+        alwaysOn: WALL_AUDIO_ENABLED,
+        playing: wallSpeechActive > 0,
+        lastPlayedAt: wallLastPlayedAt
+      },
+      lastReply: wallAudio.lastReply,
+      error: wallAudio.lastError
+    });
+  }
+
+  // A wall-PC browser tells the backend when local music is playing, so the
+  // always-on PIXY listener never mistakes the song for a visitor.
+  if (pathname === '/api/wall/music' && req.method === 'POST') {
+    try {
+      const body = await parseBody(req);
+      wallBrowserMusicUntil = body.playing ? Date.now() + 5000 : 0;
+      return sendJson(res, 200, { ok: true });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, error: err.message });
+    }
+  }
+
   // Proxy real-time RMS microphone VU level from Python sounddevice daemon
   if (pathname === '/api/mic/level' && req.method === 'GET') {
     // Cache the last level so a slow/blocked mic daemon can never stall the UI
@@ -1181,25 +1410,17 @@ const requestHandler = async (req, res) => {
     return;
   }
 
-  // Proxy microphone listening & transcription to Python daemon (Direct Device 1 @ 44.1 kHz)
+  // Browser PIXY captures share one serialized queue with the always-on wall
+  // listener, preventing simultaneous DirectSound captures on the same device.
   if (pathname === '/api/mic/listen' && req.method === 'POST') {
-    const micReq = http.request(
-      'http://127.0.0.1:3123/listen',
-      { method: 'POST', headers: { 'Content-Type': 'application/json' }, timeout: 30000 },
-      (micRes) => {
-        res.writeHead(micRes.statusCode, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-        micRes.pipe(res);
-      }
-    );
-    micReq.on('timeout', () => {
-      micReq.destroy();
-      sendJson(res, 200, { ok: false, transcript: '', timeout: true });
-    });
-    micReq.on('error', (err) => {
-      sendJson(res, 500, { ok: false, error: err.message });
-    });
-    req.pipe(micReq);
-    return;
+    lastBrowserPixyListenAt = Date.now();
+    try {
+      const result = await requestPixyListen('browser');
+      lastBrowserPixyListenAt = Date.now();
+      return sendJson(res, 200, result);
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, transcript: '', error: err.message });
+    }
   }
 
   // Audio recorded in a visitor's own browser (WAV) -> speech-to-text daemon
@@ -1272,7 +1493,8 @@ const requestHandler = async (req, res) => {
     try {
       const body = await parseBody(req);
       const audioDataUrl = await synthesizeSpeech(body);
-      return sendJson(res, 200, { ok: true, audioDataUrl });
+      queueWallSpeech(body.text, body);
+      return sendJson(res, 200, { ok: true, audioDataUrl, wallPlayback: WALL_AUDIO_ENABLED });
     } catch (err) {
       return sendJson(res, 500, { ok: false, error: err.message });
     }
@@ -1375,10 +1597,19 @@ const requestHandler = async (req, res) => {
         });
       } catch {}
 
+      // The physical wall speaker mirrors every reply, including conversations
+      // started by remote visitors. The wall-PC browser mutes its own copy.
+      queueWallSpeech(reply, {
+        voiceName: body.voiceName,
+        rate: body.rate,
+        volume: body.volume
+      });
+
       return sendJson(res, 200, {
         reply,
         audioDataUrl,
         provider: usedProvider,
+        wallPlayback: WALL_AUDIO_ENABLED,
         timestamp: new Date().toISOString()
       });
     } catch (err) {
@@ -1563,6 +1794,7 @@ server.listen(PORT, () => {
   // Turn on the PIXY's built-in AI tracking automatically (via vendor HID,
   // so the EMEET app never has to run and never grabs the camera).
   if (DAEMONS_ENABLED) enablePixyTrackingOnStartup();
+  startWallAudioLoop();
 
   // YouTube import needs yt-dlp; find it now so the first paste is instant.
   pruneYouTubeCache();

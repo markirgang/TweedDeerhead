@@ -21,7 +21,8 @@ An interactive, animatronic-style AI Deerhead ("**Buckley**, the Tweed Blvd Stag
 - **💻 Talk From Any Computer on the Network:**
   - Open the app's **https** address on a laptop, tablet or phone and switch **🎧 Listening with** to that machine's own microphone — no software to install.
   - Browser audio is voice-detected locally, sent to the wall PC as a small WAV clip, transcribed there, and answered by Buckley. The reply plays on the visitor's computer.
-  - The wall PC's PIXY microphone keeps working independently, so people standing at 121 Tweed Blvd are never ignored.
+  - Hardware Settings also includes a **browser speaker picker**, so visitors can choose which local speaker or headphones play Buckley and music (on browsers that support audio-output selection).
+  - The wall PC's PIXY microphone and default headphone-jack speaker stay on even when remote devices are selected. A backend listener owns the PIXY whenever a browser is not using it, and Buckley's replies are mirrored to the wall speaker.
 - **🎵 Music &amp; Lipsync:**
   - Import any **MP3 / WAV / M4A / OGG** file (drag it onto the card or use **Choose MP3**) and Buckley's jaw solenoid chatters along with the song in real time.
   - **Import a YouTube link** — paste a `youtu.be/…` or `youtube.com/watch?v=…` URL and Buckley downloads just the audio track onto the wall PC, then lipsyncs to it exactly like a local file. Imported tracks are cached and listed so you can replay them with one click.

@@ -417,7 +417,7 @@
         <!-- 2. MICROPHONE SETTINGS -->
         <section class="card hw-card">
           <h3>🎙️ 2. Audio Input (Microphone)</h3>
-          <p class="hw-help">Choose which Windows 11 microphone listens when visitors talk to the Deerhead on the wall.</p>
+          <p class="hw-help">The EMEET PIXY microphone on the wall PC is always on. A browser microphone is an additional input, not a replacement.</p>
 
           <div class="form-group">
             <label for="micSourceSelectHw">Which microphone listens to visitors?</label>
@@ -462,6 +462,15 @@
               <option value="spk-mstar">🔊 MStar Demo (HD Audio Driver for Display Audio)</option>
               <option value="win11-default-speaker" selected>🔊 Windows 11 Default System Speaker</option>
             </select>
+          </div>
+
+          <div class="form-group">
+            <label for="browserSpeakerSelect">Speaker on the computer viewing this page (Browser):</label>
+            <select id="browserSpeakerSelect" class="hw-select">
+              <option value="default" selected>🔊 System default speaker (this computer)</option>
+            </select>
+            <p id="browserSpeakerHint" class="hw-help">Choose which speaker on this computer plays Buckley and music.</p>
+            <p class="hw-help">The wall PC's EMEET PIXY microphone and headphone-jack speaker always remain active alongside your browser devices.</p>
           </div>
 
           <div class="form-group">
